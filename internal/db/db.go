@@ -372,8 +372,30 @@ func (d *DB) UpdateStateline(sl *model.Stateline) error {
 	return err
 }
 
-// GetLatestStateline 返回项目最新的横线。
+// GetPendingStateline 返回项目最新未消费（draft）的横线。
+// 用于：10.1.1 规则 2（虚横线存在期间不新建，并入）和消费实化。
 var ErrNoStateline = errors.New("no stateline")
+
+func (d *DB) GetPendingStateline(projectID string) (*model.Stateline, error) {
+	var sl model.Stateline
+	var diffs string
+	err := d.raw.QueryRow(`SELECT id, project_id, chain_id, state, file_diffs, consumed_by
+		FROM stateline WHERE project_id = ? AND state = 'draft'
+		ORDER BY created_at DESC, id DESC LIMIT 1`, projectID).
+		Scan(&sl.ID, &sl.ProjectID, &sl.ChainID, &sl.State, &diffs, &sl.ConsumedBy)
+	if err == sql.ErrNoRows {
+		return nil, ErrNoStateline
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(diffs), &sl.FileDiffs); err != nil {
+		return nil, err
+	}
+	return &sl, nil
+}
+
+// GetLatestStateline 返回项目最新的横线。
 
 func (d *DB) GetLatestStateline(projectID string) (*model.Stateline, error) {
 	var sl model.Stateline

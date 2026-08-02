@@ -220,3 +220,52 @@ func TestReference_Should_InsertAndLoad(t *testing.T) {
 		t.Errorf("ref = %+v", refs[0])
 	}
 }
+
+func TestStateline_Should_FindPendingDraft(t *testing.T) {
+	db := openTestDB(t)
+	// 没有横线时返回 ErrNoStateline
+	if _, err := db.GetPendingStateline("p1"); err == nil {
+		t.Fatal("expected ErrNoStateline for empty project")
+	}
+
+	// 插入 draft + solid 各一条
+	draft := model.NewStateline("p1", "c1", map[string]string{"a.go": "modified"})
+	if err := db.InsertStateline(draft); err != nil {
+		t.Fatal(err)
+	}
+	solid := model.NewStateline("p1", "c1", map[string]string{"b.go": "modified"})
+	solid.Consume("node-1")
+	if err := db.InsertStateline(solid); err != nil {
+		t.Fatal(err)
+	}
+
+	// 应返回 draft（未消费的那条）
+	got, err := db.GetPendingStateline("p1")
+	if err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if got.State != model.StatelineDraft {
+		t.Errorf("pending state = %s, want draft", got.State)
+	}
+	if got.FileDiffs["a.go"] != "modified" {
+		t.Errorf("pending diffs = %v", got.FileDiffs)
+	}
+}
+
+func TestStateline_Should_ConsumeAndPersist(t *testing.T) {
+	db := openTestDB(t)
+	sl := model.NewStateline("p1", "c1", map[string]string{"a.go": "modified"})
+	if err := db.InsertStateline(sl); err != nil {
+		t.Fatal(err)
+	}
+
+	sl.Consume("node-42")
+	if err := db.UpdateStateline(sl); err != nil {
+		t.Fatal(err)
+	}
+
+	// 消费后不再是 pending
+	if _, err := db.GetPendingStateline("p1"); err == nil {
+		t.Error("consumed stateline should not be pending")
+	}
+}

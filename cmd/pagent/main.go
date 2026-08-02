@@ -22,6 +22,7 @@ import (
 	"pagent/internal/permission"
 	"pagent/internal/provider"
 	"pagent/internal/runtime"
+	"pagent/internal/tools"
 )
 
 func main() {
@@ -217,16 +218,36 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 
 	// 权限引擎：从链所属项目的挂载目录构建（3.2.1）
 	permEng := permission.NewEngine(projectMounts(store, ch.ProjectID))
+	// CLI 场景默认：项目内 T1（读/写文件）自动允许——用户通过 CLI 启动即视为
+	// 已确认项目内文件操作；T2（命令/网络）与 T3（危险）仍需确认。
+	permEng.AddRule(permission.Rule{
+		Scope:   permission.ScopeProject,
+		Action:  permission.ActionAllow,
+		MaxTier: permission.Tier1,
+	})
 
 	cl := provider.New(baseURL, apiKey, modelName)
 	eng := runtime.NewEngine(cl)
 	eng.Sink = store // db.DB 实现 PartSink（增量落盘，WAL 语义）
 	eng.CheckPermission = func(name string, args json.RawMessage) error {
 		var a struct {
-			Path string `json:"path"`
+			Path     string `json:"path"`
+			FilePath string `json:"file_path"`
+			Command  string `json:"command"`
 		}
 		_ = json.Unmarshal(args, &a)
-		op := permission.Operation{Tool: name, Path: a.Path}
+		target := a.Path
+		if target == "" {
+			target = a.FilePath
+		}
+		if target != "" {
+			resolved, err := resolveProjectPath(permEng, target)
+			if err != nil {
+				return err
+			}
+			target = resolved
+		}
+		op := permission.Operation{Tool: name, Path: target, Command: a.Command}
 		switch permEng.Decide(op) {
 		case permission.DecisionAllow:
 			return nil
@@ -236,7 +257,44 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 			return fmt.Errorf("需要用户确认")
 		}
 	}
-	registerTools(eng, workDir, permEng)
+	fileTx := tools.NewFileTx()
+	eng.FileTx = fileTx
+	eng.CommitFileTx = func(tx *tools.FileTx) error {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		// 无文件变更的事务不产生横线（10.1.1：仅提交且有差异时）
+		dirty := tx.DirtyFiles()
+		if len(dirty) == 0 {
+			return nil
+		}
+		diffs := map[string]string{}
+		for _, p := range dirty {
+			diffs[p] = "modified"
+		}
+		// 10.1.1 规则 2：虚横线存在期间并入，不新建
+		if pending, err := store.GetPendingStateline(ch.ProjectID); err == nil {
+			for k, v := range pending.FileDiffs {
+				if _, exists := diffs[k]; !exists {
+					diffs[k] = v
+				}
+			}
+			pending.FileDiffs = diffs
+			return store.UpdateStateline(pending)
+		}
+		sl := model.NewStateline(ch.ProjectID, ch.ID, diffs)
+		return store.InsertStateline(sl)
+	}
+	registerTools(eng, permEng, fileTx)
+	// 10.1.1 规则 3：横线下方的节点创建即消费 pending 虚横线 → 实化。
+	// 产生变更的节点是横线上方的创建者，不消费自己创建的横线。
+	eng.OnNodeStart = func(nodeID string) error {
+		if pending, err := store.GetPendingStateline(ch.ProjectID); err == nil {
+			pending.Consume(nodeID)
+			return store.UpdateStateline(pending)
+		}
+		return nil
+	}
 	// 流式输出
 	eng.OnStreamPart = func(p provider.StreamPart) error {
 		if p.Type == provider.PartText {
@@ -271,6 +329,37 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 
 // registerTools 注册基础工具（里程碑0 子集：read_file / list_dir / echo）。
 // 权限模型（3.2.1）尚未完整接入，read_file/list_dir 先限制在项目工作区内（S7 安全边界）。
+// resolveProjectPath 把模型给的路径规范化到挂载目录内（3.2.1 工作目录 = 项目目录）。
+// - 相对路径/裸文件名 → join 到第一个挂载目录
+// - 绝对路径在挂载内 → 直接用
+// - 绝对路径不在挂载内 → strip 前导 / 再 join（模型常传 /main.go）
+// - 仍不在挂载目录 → 拒绝
+func resolveProjectPath(permEng *permission.Engine, p string) (string, error) {
+	mounts := permEng.Mounts()
+	if len(mounts) == 0 {
+		return "", fmt.Errorf("无挂载目录")
+	}
+	root := mounts[0]
+	var candidates []string
+	if !filepath.IsAbs(p) {
+		candidates = []string{filepath.Join(root, p)}
+	} else if permEng.Locate(p) {
+		candidates = []string{p}
+	} else {
+		candidates = []string{p, filepath.Join(root, strings.TrimPrefix(p, string(filepath.Separator)))}
+	}
+	for _, cand := range candidates {
+		abs, err := filepath.Abs(cand)
+		if err != nil {
+			continue
+		}
+		if permEng.Locate(abs) {
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("路径 %s 超出项目挂载目录", p)
+}
+
 // projectMounts 返回项目挂载目录列表。
 func projectMounts(store *db.DB, projectID string) []string {
 	p, err := store.GetProject(projectID)
@@ -280,19 +369,7 @@ func projectMounts(store *db.DB, projectID string) []string {
 	return p.Mounts
 }
 
-func registerTools(eng *runtime.Engine, workDir string, permEng *permission.Engine) {
-	// 路径必须在挂载目录内（与权限引擎同边界，3.2.1）
-	within := func(p string) (string, error) {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return "", err
-		}
-		if !permEng.Locate(abs) {
-			return "", fmt.Errorf("路径 %s 超出项目挂载目录", p)
-		}
-		return abs, nil
-	}
-
+func registerTools(eng *runtime.Engine, permEng *permission.Engine, fileTx *tools.FileTx) {
 	eng.RegisterToolSpec("read_file", "读取文件内容（仅项目目录内）",
 		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"项目内文件的绝对路径"}},"required":["path"]}`),
 		func(args json.RawMessage) (string, error) {
@@ -302,7 +379,7 @@ func registerTools(eng *runtime.Engine, workDir string, permEng *permission.Engi
 			if err := json.Unmarshal(args, &a); err != nil {
 				return "", err
 			}
-			abs, err := within(a.Path)
+			abs, err := resolveProjectPath(permEng, a.Path)
 			if err != nil {
 				return "", err
 			}
@@ -324,7 +401,7 @@ func registerTools(eng *runtime.Engine, workDir string, permEng *permission.Engi
 			if err := json.Unmarshal(args, &a); err != nil {
 				return "", err
 			}
-			abs, err := within(a.Path)
+			abs, err := resolveProjectPath(permEng, a.Path)
 			if err != nil {
 				return "", err
 			}
@@ -346,5 +423,43 @@ func registerTools(eng *runtime.Engine, workDir string, permEng *permission.Engi
 		json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
 		func(args json.RawMessage) (string, error) {
 			return string(args), nil
+		})
+	eng.RegisterToolSpec("write_file", "写入或覆盖文件（仅项目挂载目录内）",
+		json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}`),
+		func(args json.RawMessage) (string, error) {
+			var a tools.WriteFileArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", err
+			}
+			abs, err := resolveProjectPath(permEng, a.FilePath)
+			if err != nil {
+				return "", err
+			}
+			if d := permEng.Decide(permission.Operation{Tool: "write_file", Path: abs}); d != permission.DecisionAllow {
+				return "", fmt.Errorf("权限不足：写入 %s 需要用户确认", abs)
+			}
+			if err := fileTx.StageWrite(abs, a.Content); err != nil {
+				return "", err
+			}
+			return "已暂存写入 " + abs + "（节点完成时生效）", nil
+		})
+	eng.RegisterToolSpec("edit_file", "精确替换文件中的字符串（仅项目挂载目录内，old_string 必须唯一匹配）",
+		json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["file_path","old_string","new_string"]}`),
+		func(args json.RawMessage) (string, error) {
+			var a tools.EditFileArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", err
+			}
+			abs, err := resolveProjectPath(permEng, a.FilePath)
+			if err != nil {
+				return "", err
+			}
+			if d := permEng.Decide(permission.Operation{Tool: "edit_file", Path: abs}); d != permission.DecisionAllow {
+				return "", fmt.Errorf("权限不足：修改 %s 需要用户确认", abs)
+			}
+			if err := fileTx.StageEdit(tools.EditFileArgs{FilePath: abs, OldString: a.OldString, NewString: a.NewString}); err != nil {
+				return "", err
+			}
+			return "已暂存修改 " + abs + "（节点完成时生效）", nil
 		})
 }
