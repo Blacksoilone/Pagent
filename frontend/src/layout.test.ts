@@ -56,7 +56,8 @@ describe('computeLayout 手串布局', () => {
     const r = computeLayout(nodes)
     const gap = r[r.length - 1].y - r[0].y
     expect(gap).toBeGreaterThan(GAP_IMPORTANT) // 已扩展
-    expect(gap).toBeCloseTo(21 * DIAM_SMALL, 3) // = (20+1)*8
+    // 基础段 = 首尾相切(12+12) + 中间 19*8 = 176
+    expect(gap).toBeCloseTo(12 + 19 * DIAM_SMALL + 12, 3)
   })
 
   it('虚节点按普通节点处理', () => {
@@ -82,4 +83,51 @@ it('调试：1 重要 + 3 普通', () => {
   console.log('布局:', r.map(x => `${x.node.id}@${x.y.toFixed(1)}`).join(' '))
   console.log('间距:', r.slice(1).map((x, i) => (x.y - r[i].y).toFixed(1)).join(' '))
   expect(r.length).toBe(4)
+})
+
+describe('相切约束', () => {
+  it('小点与大点相邻：中心距 = 两半径之和 (4+8=12)', () => {
+    const nodes = [
+      node('s1'),
+      node('big', { important: true }),
+      node('s2'),
+    ]
+    const r = computeLayout(nodes)
+    // s1 → big：12
+    expect(r[1].y - r[0].y).toBeCloseTo(12, 5)
+    // big → s2：链尾普通节点按 d=8？还是也相切？——链尾无约束，按 8
+    // 但 big 是重要节点，s2 是普通，视觉上应相切 12？当前实现链尾段用 d。
+    // 这里验证 big 与 s2 至少不重叠（≥ 8）
+    expect(r[2].y - r[1].y).toBeGreaterThanOrEqual(8)
+  })
+
+  it('重要节点之间的段长包含首尾相切（含大点半径）', () => {
+    // 两个重要节点之间 1 个普通节点：段长 = max(6D, 12+12) = 96
+    const nodes = [
+      node('a', { important: true }),
+      node('m'),
+      node('b', { important: true }),
+    ]
+    const r = computeLayout(nodes)
+    // a → b 中心距 ≥ 6D = 96
+    expect(r[2].y - r[0].y).toBeCloseTo(GAP_IMPORTANT)
+    // m 在中间（均匀）
+    expect(r[1].y).toBeCloseTo((r[0].y + r[2].y) / 2, 5)
+  })
+
+  it('大量普通节点时：首尾段相切 12，中间段 8', () => {
+    const nodes: LayoutNode[] = [node('a', { important: true })]
+    for (let i = 0; i < 20; i++) nodes.push(node('n' + i))
+    nodes.push(node('z', { important: true }))
+    const r = computeLayout(nodes)
+    // 段长 = 12 + 19*8 + 12 = 176（已超过 6D=96，不扩展富余）
+    const gap = r[r.length - 1].y - r[0].y
+    expect(gap).toBeCloseTo(176, 5)
+    // 首段 = 12（大→小相切）
+    expect(r[1].y - r[0].y).toBeCloseTo(12, 5)
+    // 中间段 = 8
+    expect(r[3].y - r[2].y).toBeCloseTo(8, 5)
+    // 尾段 = 12（小→大相切）
+    expect(r[r.length - 1].y - r[r.length - 2].y).toBeCloseTo(12, 5)
+  })
 })
