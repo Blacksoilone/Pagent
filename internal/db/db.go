@@ -379,16 +379,18 @@ var ErrNoStateline = errors.New("no stateline")
 func (d *DB) GetPendingStateline(projectID string) (*model.Stateline, error) {
 	var sl model.Stateline
 	var diffs string
+	var consumed sql.NullString
 	err := d.raw.QueryRow(`SELECT id, project_id, chain_id, state, file_diffs, consumed_by
 		FROM stateline WHERE project_id = ? AND state = 'draft'
 		ORDER BY created_at DESC, id DESC LIMIT 1`, projectID).
-		Scan(&sl.ID, &sl.ProjectID, &sl.ChainID, &sl.State, &diffs, &sl.ConsumedBy)
+		Scan(&sl.ID, &sl.ProjectID, &sl.ChainID, &sl.State, &diffs, &consumed)
 	if err == sql.ErrNoRows {
 		return nil, ErrNoStateline
 	}
 	if err != nil {
 		return nil, err
 	}
+	sl.ConsumedBy = consumed.String
 	if err := json.Unmarshal([]byte(diffs), &sl.FileDiffs); err != nil {
 		return nil, err
 	}
@@ -400,15 +402,17 @@ func (d *DB) GetPendingStateline(projectID string) (*model.Stateline, error) {
 func (d *DB) GetLatestStateline(projectID string) (*model.Stateline, error) {
 	var sl model.Stateline
 	var diffs string
+	var consumed sql.NullString
 	err := d.raw.QueryRow(`SELECT id, project_id, chain_id, state, file_diffs, consumed_by
 		FROM stateline WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, projectID).
-		Scan(&sl.ID, &sl.ProjectID, &sl.ChainID, &sl.State, &diffs, &sl.ConsumedBy)
+		Scan(&sl.ID, &sl.ProjectID, &sl.ChainID, &sl.State, &diffs, &consumed)
 	if err == sql.ErrNoRows {
 		return nil, ErrNoStateline
 	}
 	if err != nil {
 		return nil, err
 	}
+	sl.ConsumedBy = consumed.String
 	if err := json.Unmarshal([]byte(diffs), &sl.FileDiffs); err != nil {
 		return nil, err
 	}
