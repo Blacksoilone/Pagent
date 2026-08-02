@@ -101,6 +101,7 @@ function scrollToBottom() {
 interface LayoutResultWithStatus {
   node: LayoutNode
   y: number
+  big: boolean
   status: string
 }
 
@@ -204,10 +205,10 @@ onMounted(refresh)
             <!-- 珠子 -->
             <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
               <circle
-                :r="(it.node.important || it.node.ghost) ? diamBig / 2 : diamSmall / 2"
-                :fill="it.node.important ? '#2a6db5' : (it.node.ghost ? 'none' : '#7fa8d9')"
-                :stroke="it.node.important ? '#1a4f8a' : (it.node.ghost ? '#7fa8d9' : 'none')"
-                :stroke-width="it.node.ghost ? 2 : (it.node.important ? 0 : 0)"
+                :r="it.big ? diamBig / 2 : diamSmall / 2"
+                :fill="it.node.ghost ? 'none' : (it.big ? '#2a6db5' : '#7fa8d9')"
+                :stroke="it.node.ghost ? '#7fa8d9' : (it.big ? '#1a4f8a' : 'none')"
+                :stroke-width="it.node.ghost ? 2 : 0"
                 :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
                 :opacity="it.status === 'partial' ? 0.5 : 1"
               />

@@ -6,12 +6,18 @@ function node(id: string, opts: Partial<LayoutNode> = {}): LayoutNode {
 }
 
 describe('computeLayout 手串布局', () => {
-  it('全普通节点：等间距 = 点直径', () => {
+  it('全普通节点：首尾自动大节点，中间等间距', () => {
     const nodes = [node('a'), node('b'), node('c')]
     const r = computeLayout(nodes)
     expect(r.length).toBe(3)
-    expect(r[1].y - r[0].y).toBeCloseTo(DIAM_SMALL)
-    expect(r[2].y - r[1].y).toBeCloseTo(DIAM_SMALL)
+    // a、c 自动是大节点（big=true）
+    expect(r[0].big).toBe(true)
+    expect(r[2].big).toBe(true)
+    expect(r[1].big).toBe(false)
+    // a→c 之间 1 个小点：间距 = 6D
+    expect(r[2].y - r[0].y).toBeCloseTo(GAP_IMPORTANT, 5)
+    // b 在中间
+    expect(r[1].y).toBeCloseTo((r[0].y + r[2].y) / 2, 5)
   })
 
   it('两个重要节点：间距至少 6D，中间普通节点均匀填充', () => {
@@ -86,19 +92,20 @@ it('调试：1 重要 + 3 普通', () => {
 })
 
 describe('相切约束', () => {
-  it('小点与大点相邻：中心距 = 两半径之和 (4+8=12)', () => {
+  it('链尾节点自动大节点：首尾大节点之间 1 个小点 → 6D', () => {
     const nodes = [
       node('s1'),
       node('big', { important: true }),
       node('s2'),
     ]
     const r = computeLayout(nodes)
-    // s1 → big：12
-    expect(r[1].y - r[0].y).toBeCloseTo(12, 5)
-    // big → s2：链尾普通节点按 d=8？还是也相切？——链尾无约束，按 8
-    // 但 big 是重要节点，s2 是普通，视觉上应相切 12？当前实现链尾段用 d。
-    // 这里验证 big 与 s2 至少不重叠（≥ 8）
-    expect(r[2].y - r[1].y).toBeGreaterThanOrEqual(8)
+    // s1 是链首 → 自动大节点；big 重要；s2 链尾 → 自动大节点
+    expect(r[0].big).toBe(true)
+    expect(r[1].big).toBe(true)
+    expect(r[2].big).toBe(true)
+    // 两个区间：s1→big（k=0）和 big→s2（k=0）都是 6D
+    expect(r[1].y - r[0].y).toBeCloseTo(GAP_IMPORTANT, 5)
+    expect(r[2].y - r[1].y).toBeCloseTo(GAP_IMPORTANT, 5)
   })
 
   it('重要节点之间的段长包含首尾相切（含大点半径）', () => {
