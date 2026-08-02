@@ -174,9 +174,23 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput string, onStream fu
 	if err != nil {
 		return err
 	}
+
+	// 10.1.1：虚节点与上一节点之间隔了 pending 虚横线 → 文件在上一节点之后发生了变化，
+	// 本次对话开始前注入提醒（4.5 系统注入消息），让 AI 重新查看相关文件。
+	var injections []string
+	if pending, err := r.Store.GetPendingStateline(ch.ProjectID); err == nil {
+		var files []string
+		for f := range pending.FileDiffs {
+			files = append(files, f)
+		}
+		injections = append(injections, "[系统] 文件状态已发生变化（"+
+			strings.Join(files, ", ")+"）。当前工作区文件已更新，请重新查看相关文件后再继续。")
+	}
+
 	assembled, err := pagentctx.Assemble(pagentctx.AssembleInput{
-		History:   history,
-		UserInput: userInput,
+		History:    history,
+		Injections: injections,
+		UserInput:  userInput,
 	})
 	if err != nil {
 		return err

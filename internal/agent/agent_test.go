@@ -2,7 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pagent/internal/db"
@@ -144,4 +149,46 @@ func TestCheckPermission_Should_ResolveFilePathField(t *testing.T) {
 		t.Log("no mounts: outside path correctly resolved")
 	}
 	_ = context.Background
+}
+
+func TestRun_Should_InjectFileChangeNotice_WhenPendingStateline(t *testing.T) {
+	store := openTestDB(t)
+	p := model.NewProject("proj", []string{t.TempDir()})
+	store.CreateProject(p)
+	ch := model.NewChain(p.ID, "主链")
+	store.CreateChain(ch)
+
+	// 已有 pending draft 横线（文件在上一个节点之后变了）
+	sl := model.NewStateline(p.ID, ch.ID, map[string]string{"/work/a.go": "modified"})
+	store.InsertStateline(sl)
+
+	// mock OpenAI 端点：捕获请求体，返回空 SSE
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"}}]}
+
+data: [DONE]
+
+`)
+	}))
+	defer srv.Close()
+
+	cl := provider.New(srv.URL, "k", "m")
+	runner := NewRunner(store, cl, t.TempDir())
+	err := runner.Run(context.Background(), ch.ID, "继续", nil, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotBody == "" {
+		t.Fatal("provider not called")
+	}
+	if !strings.Contains(gotBody, "文件状态已发生变化") {
+		t.Errorf("request missing file change notice: %s", gotBody[:min(len(gotBody), 300)])
+	}
+	if !strings.Contains(gotBody, "/work/a.go") {
+		t.Errorf("request missing changed file path: %s", gotBody[:min(len(gotBody), 300)])
+	}
 }
