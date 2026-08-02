@@ -22,14 +22,34 @@ export interface LayoutResult {
   big: boolean // 是否按大节点规则布局/渲染
 }
 
-export const DIAM_SMALL = 8     // 普通节点直径 d
-export const DIAM_BIG = 16      // 重要节点/虚节点直径 D
-export const GAP_IMPORTANT = 6 * DIAM_BIG // 重要节点最小中心距 6D
+export const DIAM_SMALL = 8     // 普通节点直径 d（默认值）
+export const DIAM_BIG = 16      // 重要节点/虚节点直径 D（默认值）
+export const GAP_IMPORTANT = 6 * DIAM_BIG // 重要节点最小中心距 6D（默认值）
 
-const R_SMALL = DIAM_SMALL / 2  // 4
-const R_BIG = DIAM_BIG / 2      // 8
+export interface LayoutOptions {
+  diamSmall?: number  // 普通节点直径
+  diamBig?: number    // 重要节点/虚节点直径
+  gapImportant?: number // 重要节点最小中心距
+}
 
-export function computeLayout(nodes: LayoutNode[]): LayoutResult[] {
+export const DEFAULT_OPTIONS: LayoutOptions = {
+  diamSmall: DIAM_SMALL,
+  diamBig: DIAM_BIG,
+  gapImportant: GAP_IMPORTANT,
+}
+
+export function computeLayout(nodes: LayoutNode[], options?: LayoutOptions): LayoutResult[] {
+  const opt: Required<LayoutOptions> = {
+    diamSmall: options?.diamSmall ?? DIAM_SMALL,
+    diamBig: options?.diamBig ?? DIAM_BIG,
+    gapImportant: options?.gapImportant ?? GAP_IMPORTANT,
+  }
+  const d = opt.diamSmall
+  const D = opt.diamBig
+  const gapImp = opt.gapImportant
+  const R_SMALL = d / 2
+  const R_BIG = D / 2
+
   const n = nodes.length
   if (n === 0) return []
 
@@ -58,8 +78,8 @@ export function computeLayout(nodes: LayoutNode[]): LayoutResult[] {
     // 基础段 = A→n1 相切 + 中间相切 + nk→B 相切；k=0 时两个大节点相切 2R_BIG
     const baseTotal = k === 0
       ? 2 * R_BIG
-      : (R_SMALL + R_BIG) + (k - 1) * DIAM_SMALL + (R_SMALL + R_BIG)
-    const segLen = Math.max(GAP_IMPORTANT, baseTotal)
+      : (R_SMALL + R_BIG) + (k - 1) * d + (R_SMALL + R_BIG)
+    const segLen = Math.max(gapImp, baseTotal)
     const extra = segLen - baseTotal
 
     // 各段长度：首尾相切段 + 中间段，富余均匀分配
@@ -70,7 +90,7 @@ export function computeLayout(nodes: LayoutNode[]): LayoutResult[] {
       if (k === 0) {
         base = 2 * R_BIG
       } else {
-        base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : DIAM_SMALL
+        base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : d
       }
       segs.push(base + extra / segCount)
     }
@@ -87,7 +107,7 @@ export function computeLayout(nodes: LayoutNode[]): LayoutResult[] {
   // 兜底：若某位置未赋值（如仅 1 个节点），按大节点补
   for (let i = 0; i < n; i++) {
     if (!result[i]) {
-      result[i] = { node: nodes[i], y: R_BIG + i * DIAM_SMALL, big: isBigAt(i) }
+      result[i] = { node: nodes[i], y: R_BIG + i * d, big: isBigAt(i) }
     }
   }
 

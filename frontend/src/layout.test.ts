@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeLayout, DIAM_SMALL, GAP_IMPORTANT, type LayoutNode } from './layout'
+import { computeLayout, DEFAULT_OPTIONS, DIAM_SMALL, DIAM_BIG, GAP_IMPORTANT, type LayoutNode } from './layout'
 
 function node(id: string, opts: Partial<LayoutNode> = {}): LayoutNode {
   return { id, important: false, ghost: false, ...opts }
@@ -222,5 +222,28 @@ describe('6D 是最小值（可被小点数量推远）', () => {
     const gap2 = r[ic].y - r[ib].y
     expect(gap2).toBeCloseTo(12 + 14 * 8 + 12, 5)
     expect(gap2).toBeGreaterThan(GAP_IMPORTANT)
+  })
+})
+
+describe('自定义参数', () => {
+  it('自定义 d/D/间距：布局按参数计算', () => {
+    const nodes = [
+      node('a', { important: true }),
+      node('m'),
+      node('b', { important: true }),
+    ]
+    const r = computeLayout(nodes, { diamSmall: 10, diamBig: 20, gapImportant: 100 })
+    // 1 个小点：段长 = max(100, 相切 15+15=30) = 100
+    expect(r[2].y - r[0].y).toBeCloseTo(100, 5)
+    // 首尾相切 = R_S(5) + R_B(10) = 15
+    expect(r[1].y - r[0].y).toBeCloseTo(50, 5) // 100 均匀两段
+    // m 在中间
+    expect(r[1].y).toBeCloseTo((r[0].y + r[2].y) / 2, 5)
+  })
+
+  it('默认参数与常量一致', () => {
+    expect(DEFAULT_OPTIONS.diamSmall).toBe(DIAM_SMALL)
+    expect(DEFAULT_OPTIONS.diamBig).toBe(DIAM_BIG)
+    expect(DEFAULT_OPTIONS.gapImportant).toBe(GAP_IMPORTANT)
   })
 })

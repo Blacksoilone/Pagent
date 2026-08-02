@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
-import { computeLayout, DIAM_SMALL, DIAM_BIG, type LayoutNode } from './layout'
-
-// 模板可访问的直径常量
-const diamSmall = DIAM_SMALL
-const diamBig = DIAM_BIG
+import { computeLayout, DEFAULT_OPTIONS, type LayoutNode, type LayoutOptions } from './layout'
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -17,6 +13,42 @@ const input = ref('')
 const streaming = ref(false)
 const toolLog = ref<string[]>([])
 const view = ref<'chat' | 'graph'>('chat')
+const showSettings = ref(false)
+
+// 布局参数（localStorage 持久化，可在设置面板调整）
+const layoutSettings = ref<Required<LayoutOptions>>(loadSettings())
+function loadSettings(): Required<LayoutOptions> {
+  const base: Required<LayoutOptions> = {
+    diamSmall: DEFAULT_OPTIONS.diamSmall!,
+    diamBig: DEFAULT_OPTIONS.diamBig!,
+    gapImportant: DEFAULT_OPTIONS.gapImportant!,
+  }
+  try {
+    const raw = localStorage.getItem('pagent-layout')
+    if (raw) return { ...base, ...JSON.parse(raw) }
+  } catch { /* ignore */ }
+  return base
+}
+function saveSettings() {
+  localStorage.setItem('pagent-layout', JSON.stringify(layoutSettings.value))
+  layoutSettings.value = { ...layoutSettings.value } // 触发重算
+}
+const diamSmall = computed(() => layoutSettings.value.diamSmall)
+const diamBig = computed(() => layoutSettings.value.diamBig)
+const gapMultiplier = computed({
+  get: () => layoutSettings.value.gapImportant / layoutSettings.value.diamBig,
+  set: (v: number) => {
+    layoutSettings.value.gapImportant = Math.round(v * layoutSettings.value.diamBig)
+  },
+})
+function resetSettings() {
+  layoutSettings.value = {
+    diamSmall: DEFAULT_OPTIONS.diamSmall!,
+    diamBig: DEFAULT_OPTIONS.diamBig!,
+    gapImportant: DEFAULT_OPTIONS.gapImportant!,
+  }
+  saveSettings()
+}
 const expandedProject = ref<string | null>(null) // 展开的项目（树形）
 const scrollBox = ref<HTMLElement | null>(null)
 
@@ -111,7 +143,7 @@ const braceletItems = computed<LayoutResultWithStatus[]>(() => {
     important: n.kind === 'important',
     ghost: n.kind === 'ghost',
   }))
-  const laid = computeLayout(lns)
+  const laid = computeLayout(lns, layoutSettings.value)
   const statusById = new Map(nodes.value.map(n => [n.id, n.status]))
   return laid.map(it => ({ ...it, status: statusById.get(it.node.id) || 'done' } as LayoutResultWithStatus))
 })
@@ -170,6 +202,7 @@ onMounted(refresh)
         <button class="view-btn" @click="view = view === 'chat' ? 'graph' : 'chat'">
           {{ view === 'chat' ? '链视图' : '对话' }}
         </button>
+        <button class="view-btn" @click="showSettings = !showSettings">⚙ 设置</button>
       </header>
 
       <!-- 对话视图 -->
@@ -217,7 +250,33 @@ onMounted(refresh)
         </div>
       </main>
 
-      <!-- 输入区 -->
+      <!-- 设置面板 -->
+    <div v-if="showSettings" class="settings-overlay" @click.self="showSettings = false">
+      <div class="settings-panel">
+        <h3>链布局参数</h3>
+        <div class="setting-row">
+          <label>普通节点直径 (d)</label>
+          <input type="number" min="2" max="32" v-model.number="layoutSettings.diamSmall" @change="saveSettings" />
+          <span class="setting-hint">当前 {{ layoutSettings.diamSmall }}px</span>
+        </div>
+        <div class="setting-row">
+          <label>重要节点直径 (D)</label>
+          <input type="number" min="4" max="64" v-model.number="layoutSettings.diamBig" @change="saveSettings" />
+          <span class="setting-hint">当前 {{ layoutSettings.diamBig }}px</span>
+        </div>
+        <div class="setting-row">
+          <label>重要节点最小间距 (×D)</label>
+          <input type="number" min="1" max="20" v-model.number="gapMultiplier" @change="saveSettings" />
+          <span class="setting-hint">= {{ layoutSettings.gapImportant }}px</span>
+        </div>
+        <div class="setting-actions">
+          <button @click="resetSettings">恢复默认</button>
+          <button class="primary" @click="showSettings = false">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输入区 -->
       <footer class="input-area">
         <div class="input-box">
           <textarea
@@ -307,6 +366,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
 .bracelet-wrap { display: flex; justify-content: center; }
 .chain-svg { min-height: 300px; }
+
+.settings-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.3);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.settings-panel {
+  background: #fff; border-radius: 12px; padding: 24px;
+  width: 360px; box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+}
+.settings-panel h3 { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+.setting-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.setting-row label { flex: 1; font-size: 13px; color: #333; }
+.setting-row input {
+  width: 70px; padding: 6px 8px; border: 1px solid #d9d9e3;
+  border-radius: 6px; font-size: 13px;
+}
+.setting-hint { font-size: 11px; color: #8e8ea0; width: 90px; }
+.setting-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.setting-actions button {
+  padding: 7px 16px; border: 1px solid #d9d9e3; border-radius: 8px;
+  background: #fff; font-size: 13px; cursor: pointer;
+}
+.setting-actions button.primary { background: #111; color: #fff; border-color: #111; }
 
 .input-area { border-top: 1px solid #ececf1; padding: 12px 20px 16px; background: #fff; }
 .input-box {
