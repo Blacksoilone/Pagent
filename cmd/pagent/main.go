@@ -127,11 +127,7 @@ func cmdInit(ctx context.Context, store *db.DB, workDir string) error {
 	if err := store.CreateProject(p); err != nil {
 		return err
 	}
-	ch := model.NewChain(p.ID, "主链")
-	if err := store.CreateChain(ch); err != nil {
-		return err
-	}
-	fmt.Printf("初始化完成：项目 %s，链 %s\n", p.ID, ch.ID)
+	fmt.Printf("初始化完成：项目 %s（链将在首次对话时创建）\n", p.ID)
 	return nil
 }
 
@@ -165,7 +161,17 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 		return err
 	}
 	if len(chains) == 0 {
-		return fmt.Errorf("没有链，先运行 pagent init")
+		// 首次对话：自动创建一条链（3.3 链由对话产生）
+		projects, perr := store.ListProjects()
+		if perr != nil || len(projects) == 0 {
+			return fmt.Errorf("没有项目，先运行 pagent init")
+		}
+		ch := model.NewChain(projects[0].ID, "对话 1")
+		if cerr := store.CreateChain(ch); cerr != nil {
+			return cerr
+		}
+		fmt.Printf("已创建链 %s（%s）\n", ch.ID, ch.Name)
+		chains, _ = store.ListChains()
 	}
 	target := chains[0]
 	if chainID != "" {

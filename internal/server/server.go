@@ -35,6 +35,7 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	s := &Server{store: store, provider: cl, workDir: workDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/chains", s.handleChains)
+	mux.HandleFunc("POST /api/chains", s.handleCreateChain)
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
@@ -132,6 +133,33 @@ type StatelineDTO struct {
 	State      string            `json:"state"`
 	FileDiffs  map[string]string `json:"file_diffs"`
 	ConsumedBy string            `json:"consumed_by,omitempty"`
+}
+
+// CreateChainRequest 创建链请求。
+type CreateChainRequest struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleCreateChain(w http.ResponseWriter, r *http.Request) {
+	var req CreateChainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "请求格式错误: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		req.Name = "对话 1"
+	}
+	projects, err := s.store.ListProjects()
+	if err != nil || len(projects) == 0 {
+		writeErr(w, 400, "没有项目，先运行 pagent init")
+		return
+	}
+	ch := model.NewChain(projects[0].ID, req.Name)
+	if err := s.store.CreateChain(ch); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, ChainDTO{ID: ch.ID, Name: ch.Name, Status: ch.Status})
 }
 
 func (s *Server) handleStatelines(w http.ResponseWriter, r *http.Request) {

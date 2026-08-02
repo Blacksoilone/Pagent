@@ -1,20 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { chat, fetchChainNodes, fetchChains, fetchStatelines, type ChainDTO, type NodeDTO, type StatelineDTO } from './api'
+import { onMounted, ref, nextTick } from 'vue'
+import { chat, fetchChainNodes, fetchChains, type ChainDTO, type NodeDTO } from './api'
 
+// ── 状态 ──
 const chains = ref<ChainDTO[]>([])
 const selectedChain = ref<string>('')
 const nodes = ref<NodeDTO[]>([])
-const statelines = ref<StatelineDTO[]>([])
+const messages = ref<Array<{ role: string; content: string }>>([])
 const input = ref('')
 const streaming = ref(false)
-const streamText = ref('')
 const toolLog = ref<string[]>([])
+const view = ref<'chat' | 'graph'>('chat') // chat=对话视图（默认） graph=链视图
+const scrollBox = ref<HTMLElement | null>(null)
 
 async function refresh() {
   chains.value = await fetchChains()
-  statelines.value = await fetchStatelines()
-  if (!selectedChain.value && chains.value.length > 0) {
+  if (chains.value.length > 0 && !chains.value.find(c => c.id === selectedChain.value)) {
     selectedChain.value = chains.value[0].id
   }
   if (selectedChain.value) {
@@ -22,131 +23,215 @@ async function refresh() {
   }
 }
 
-async function selectChain(id: string) {
-  selectedChain.value = id
-  nodes.value = await fetchChainNodes(id)
+async function ensureChain(): Promise<string | null> {
+  if (selectedChain.value) return selectedChain.value
+  if (chains.value.length === 0) {
+    const res = await fetch('/api/chains', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '对话 1' }),
+    })
+    if (!res.ok) return null
+    const ch = await res.json() as ChainDTO
+    chains.value = [ch]
+    selectedChain.value = ch.id
+    return ch.id
+  }
+  selectedChain.value = chains.value[0].id
+  return selectedChain.value
 }
 
 async function send() {
   const msg = input.value.trim()
-  if (!msg || !selectedChain.value || streaming.value) return
+  if (!msg || streaming.value) return
+  const chainId = await ensureChain()
+  if (!chainId) return
   input.value = ''
   streaming.value = true
-  streamText.value = ''
   toolLog.value = []
+  messages.value.push({ role: 'user', content: msg })
+  messages.value.push({ role: 'assistant', content: '' }) // 流式占位
+  const aiIdx = messages.value.length - 1
   try {
-    await chat(selectedChain.value, msg, (ev) => {
-      if (ev.type === 'text') streamText.value += ev.data
-      else if (ev.type === 'tool') toolLog.value.push(ev.data)
-      else if (ev.type === 'error') toolLog.value.push('错误: ' + ev.data)
-      else if (ev.type === 'done') {
+    await chat(chainId, msg, (ev) => {
+      if (ev.type === 'text') {
+        messages.value[aiIdx].content += ev.data
+        scrollToBottom()
+      } else if (ev.type === 'tool') {
+        toolLog.value.push(ev.data)
+      } else if (ev.type === 'error') {
+        toolLog.value.push('错误: ' + ev.data)
+      } else if (ev.type === 'done') {
         streaming.value = false
         refresh()
       }
     })
   } catch (e) {
-    toolLog.value.push('请求失败: ' + String(e))
+    messages.value[aiIdx].content = '请求失败: ' + String(e)
   }
   streaming.value = false
   refresh()
 }
 
-onMounted(refresh)
+function scrollToBottom() {
+  nextTick(() => {
+    if (scrollBox.value) scrollBox.value.scrollTop = scrollBox.value.scrollHeight
+  })
+}
 
-// ── 链图布局 ──
-const layout = computed(() => {
-  const items: Array<{ node: NodeDTO; y: number; isGhost: boolean }> = []
-  let y = 20
-  for (const n of nodes.value) {
-    const isGhost = n.kind === 'ghost'
-    items.push({ node: n, y, isGhost })
-    y += 64
-  }
-  const graphBottom = y + 20
-  const lines = statelines.value.map((sl, i) => ({ sl, y: graphBottom + 40 + i * 40 }))
-  return { items, graphBottom, lines }
-})
+onMounted(refresh)
 </script>
 
 <template>
   <div class="app">
-    <aside class="sidebar">
-      <h2>工作空间</h2>
-      <ul class="chain-list">
-        <li v-for="c in chains" :key="c.id" :class="{ active: c.id === selectedChain }" @click="selectChain(c.id)">
-          {{ c.name }}
-        </li>
-      </ul>
-      <div class="statelines" v-if="statelines.length > 0">
-        <h3>文件状态</h3>
-        <div v-for="sl in statelines" :key="sl.id" class="stateline" :class="sl.state">
-          <span class="sl-state">{{ sl.state === 'solid' ? '●' : '○' }}</span>
-          <span class="sl-files">{{ Object.keys(sl.file_diffs).join(', ') }}</span>
+    <!-- 顶部栏 -->
+    <header class="topbar">
+      <div class="brand">Pagent</div>
+      <div class="chain-select" v-if="chains.length > 0">
+        <select :value="selectedChain" @change="selectedChain = ($event.target as HTMLSelectElement).value; refresh()">
+          <option v-for="c in chains" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </div>
+      <div class="top-actions">
+        <button class="view-btn" @click="view = view === 'chat' ? 'graph' : 'chat'">
+          {{ view === 'chat' ? '链视图' : '对话' }}
+        </button>
+      </div>
+    </header>
+
+    <!-- 对话视图（默认） -->
+    <main v-if="view === 'chat'" class="chat-main" ref="scrollBox">
+      <div class="messages">
+        <div v-if="messages.length === 0" class="welcome">
+          <h1>Pagent</h1>
+          <p>多 Agent 对话工作空间</p>
+        </div>
+        <template v-for="(m, i) in messages" :key="i">
+          <div class="msg-row" :class="m.role">
+            <div class="avatar" v-if="m.role === 'assistant'">P</div>
+            <div class="bubble">{{ m.content }}<span v-if="streaming && i === messages.length - 1" class="cursor">▍</span></div>
+          </div>
+        </template>
+        <div class="tool-log" v-if="toolLog.length > 0">
+          <div v-for="(t, i) in toolLog" :key="'t' + i" class="tool-item">{{ t }}</div>
         </div>
       </div>
-    </aside>
-
-    <main class="main">
-      <section class="graph">
-        <svg class="chain-svg" :viewBox="'0 0 600 ' + (layout.graphBottom + 80)">
-          <line v-for="(it, i) in layout.items.filter(x => !x.isGhost)" :key="'line-' + i"
-            x1="80" :y1="it.y" x2="80" :y2="it.y + 64" stroke="#4a90d9" stroke-width="2" opacity="0.4" />
-          <g v-for="it in layout.items" :key="it.node.id" :transform="'translate(80,' + it.y + ')'">
-            <circle v-if="!it.isGhost" :r="it.node.kind === 'important' ? 7 : 4"
-              :fill="it.node.status === 'partial' ? '#888' : '#4a90d9'"
-              :stroke="it.node.kind === 'important' ? '#2a6db5' : 'none'" stroke-width="2" />
-            <circle v-else r="5" fill="none" stroke="#4a90d9" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5" />
-          </g>
-          <g v-for="l in layout.lines" :key="l.sl.id">
-            <line x1="20" :y1="l.y" x2="580" :y2="l.y"
-              :stroke="l.sl.state === 'solid' ? '#c0392b' : '#e67e22'"
-              :stroke-dasharray="l.sl.state === 'solid' ? 'none' : '6,4'" stroke-width="2" />
-            <text x="590" :y="l.y + 4" font-size="10" fill="#888" text-anchor="end">
-              {{ Object.keys(l.sl.file_diffs).join(', ') }}
-            </text>
-          </g>
-        </svg>
-      </section>
-
-      <section class="chat">
-        <div class="tool-log" v-if="toolLog.length > 0">
-          <div v-for="(t, i) in toolLog" :key="i" class="tool-item">{{ t }}</div>
-        </div>
-        <div class="stream" v-if="streamText">{{ streamText }}</div>
-        <div class="input-row">
-          <input v-model="input" placeholder="输入消息，Enter 发送" :disabled="streaming" @keydown.enter="send" />
-          <button :disabled="streaming || !input.trim()" @click="send">{{ streaming ? '…' : '发送' }}</button>
-        </div>
-      </section>
     </main>
+
+    <!-- 链视图 -->
+    <main v-else class="graph-main">
+      <div class="graph-toolbar">
+        <span>链：{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
+        <span class="node-count">{{ nodes.length }} 个节点</span>
+      </div>
+      <svg class="chain-svg" :viewBox="'0 0 400 ' + Math.max(300, nodes.length * 60 + 40)">
+        <line v-for="(_, i) in nodes.filter(x => x.kind !== 'ghost')" :key="'l' + i"
+          x1="200" :y1="40 + i * 60" x2="200" :y2="40 + (i + 1) * 60"
+          stroke="#4a90d9" stroke-width="2" opacity="0.4" />
+        <g v-for="(n, i) in nodes" :key="n.id" :transform="'translate(200,' + (40 + i * 60) + ')'">
+          <circle v-if="n.kind !== 'ghost'" :r="n.kind === 'important' ? 7 : 4"
+            :fill="n.status === 'partial' ? '#888' : '#4a90d9'" />
+          <circle v-else r="5" fill="none" stroke="#4a90d9" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5" />
+        </g>
+      </svg>
+    </main>
+
+    <!-- 输入区 -->
+    <footer class="input-area">
+      <div class="input-box">
+        <textarea
+          v-model="input"
+          rows="1"
+          placeholder="输入消息…"
+          :disabled="streaming"
+          @keydown.enter.exact.prevent="send"
+        ></textarea>
+        <button class="send-btn" :disabled="streaming || !input.trim()" @click="send">
+          <svg v-if="!streaming" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
+          </svg>
+          <span v-else class="spinner"></span>
+        </button>
+      </div>
+      <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
+    </footer>
   </div>
 </template>
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: system-ui, sans-serif; }
-.app { display: flex; height: 100vh; }
-.sidebar { width: 220px; background: #f5f5f0; border-right: 1px solid #e0e0db; padding: 16px; overflow-y: auto; }
-.sidebar h2 { font-size: 14px; margin-bottom: 12px; color: #333; }
-.chain-list { list-style: none; }
-.chain-list li { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #444; }
-.chain-list li:hover { background: #ecece5; }
-.chain-list li.active { background: #4a90d9; color: #fff; }
-.statelines { margin-top: 24px; }
-.statelines h3 { font-size: 12px; color: #888; margin-bottom: 8px; }
-.stateline { font-size: 11px; padding: 4px 0; color: #555; }
-.stateline .sl-state { margin-right: 6px; }
-.stateline.draft .sl-state { color: #e67e22; }
-.stateline.solid .sl-state { color: #c0392b; }
-.main { flex: 1; display: flex; flex-direction: column; }
-.graph { flex: 1; overflow: auto; background: #fafaf7; padding: 12px; }
-.chain-svg { width: 100%; min-height: 200px; }
-.chat { border-top: 1px solid #e0e0db; padding: 12px; background: #fff; }
-.tool-log { max-height: 80px; overflow-y: auto; margin-bottom: 8px; }
-.tool-item { font-size: 11px; color: #666; font-family: monospace; padding: 2px 0; }
-.stream { font-size: 13px; color: #222; white-space: pre-wrap; margin-bottom: 8px; max-height: 120px; overflow-y: auto; }
-.input-row { display: flex; gap: 8px; }
-.input-row input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
-.input-row button { padding: 8px 20px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
-.input-row button:disabled { background: #ccc; cursor: default; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 20px; border-bottom: 1px solid #ececf1;
+  background: #fff;
+}
+.brand { font-size: 15px; font-weight: 600; color: #111; }
+.chain-select select {
+  padding: 4px 8px; border: 1px solid #e0e0e0; border-radius: 6px;
+  font-size: 13px; color: #333; background: #fff;
+}
+.top-actions { margin-left: auto; }
+.view-btn {
+  padding: 6px 14px; border: 1px solid #d9d9e3; border-radius: 8px;
+  background: #fff; color: #333; font-size: 13px; cursor: pointer;
+}
+.view-btn:hover { background: #f5f5f7; }
+
+.chat-main { flex: 1; overflow-y: auto; }
+.messages { max-width: 760px; margin: 0 auto; padding: 32px 24px 80px; }
+.welcome { text-align: center; padding-top: 100px; }
+.welcome h1 { font-size: 28px; font-weight: 600; color: #111; }
+.welcome p { font-size: 14px; color: #8e8ea0; margin-top: 8px; }
+
+.msg-row { display: flex; gap: 12px; margin-bottom: 24px; }
+.msg-row.user { justify-content: flex-end; }
+.msg-row.user .bubble {
+  background: #f0f0f5; color: #111; border-radius: 12px 12px 2px 12px;
+}
+.msg-row.assistant { justify-content: flex-start; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 8px; background: #111;
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; flex-shrink: 0;
+}
+.bubble {
+  padding: 10px 16px; border-radius: 12px; font-size: 14px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; max-width: 80%;
+}
+.cursor { animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.tool-log { margin-top: 8px; }
+.tool-item { font-size: 12px; color: #8e8ea0; font-family: ui-monospace, monospace; padding: 3px 0; }
+
+.graph-main { flex: 1; overflow: auto; padding: 16px; }
+.graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
+.chain-svg { width: 100%; min-height: 300px; }
+
+.input-area { border-top: 1px solid #ececf1; padding: 12px 20px 16px; background: #fff; }
+.input-box {
+  max-width: 760px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
+  border: 1px solid #d9d9e3; border-radius: 12px; padding: 8px 8px 8px 16px;
+  background: #fff;
+}
+.input-box:focus-within { border-color: #4a90d9; box-shadow: 0 0 0 2px rgba(74,144,217,0.15); }
+.input-box textarea {
+  flex: 1; border: none; outline: none; resize: none; font-size: 14px;
+  font-family: inherit; line-height: 1.5; max-height: 160px; background: transparent;
+}
+.send-btn {
+  width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: #111; color: #fff; display: flex; align-items: center;
+  justify-content: center; cursor: pointer; flex-shrink: 0;
+}
+.send-btn:disabled { background: #d9d9e3; cursor: default; }
+.spinner {
+  width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent;
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.input-hint { max-width: 760px; margin: 6px auto 0; font-size: 11px; color: #b0b0c0; }
 </style>
