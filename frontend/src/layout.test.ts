@@ -174,3 +174,46 @@ describe('虚节点按重要节点规则', () => {
   })
 })
 
+
+describe('6D 是最小值（可被小点数量推远）', () => {
+  function gapWithK(k: number): number {
+    const nodes: LayoutNode[] = [node('a', { important: true })]
+    for (let i = 0; i < k; i++) nodes.push(node('n' + i))
+    nodes.push(node('z', { important: true }))
+    const r = computeLayout(nodes)
+    return r[r.length - 1].y - r[0].y
+  }
+
+  it('k=1：间距恰好 = 6D（下限）', () => {
+    expect(gapWithK(1)).toBeCloseTo(GAP_IMPORTANT, 5)
+  })
+
+  it('k=7：仍为 6D（基础段 72 < 96）', () => {
+    // 基础段 = 12 + 6*8 + 12 = 72 < 6D=96 → 6D 主导
+    expect(gapWithK(7)).toBeCloseTo(GAP_IMPORTANT, 5)
+  })
+
+  it('k=11：超过 6D，小点距离主导（基础段 104 > 96）', () => {
+    // 基础段 = 12 + 10*8 + 12 = 104 > 96 → 小点主导
+    expect(gapWithK(11)).toBeCloseTo(12 + 10 * 8 + 12, 5)
+    expect(gapWithK(11)).toBeGreaterThan(GAP_IMPORTANT)
+  })
+
+  it('两个区间独立：一个小点区间 6D，多小点区间扩展', () => {
+    const nodes: LayoutNode[] = [node('a', { important: true })]
+    nodes.push(node('only'))                    // 区间1：1个小点
+    nodes.push(node('b', { important: true }))
+    for (let i = 0; i < 15; i++) nodes.push(node('m' + i)) // 区间2：15个小点
+    nodes.push(node('c', { important: true }))
+
+    const r = computeLayout(nodes)
+    // 找大点索引
+    const ia = 0, ib = 2, ic = r.length - 1
+    // 区间1 (a→b)：1个小点 → 6D
+    expect(r[ib].y - r[ia].y).toBeCloseTo(GAP_IMPORTANT, 5)
+    // 区间2 (b→c)：15个小点 → 基础段 = 12+14*8+12 = 136 > 96
+    const gap2 = r[ic].y - r[ib].y
+    expect(gap2).toBeCloseTo(12 + 14 * 8 + 12, 5)
+    expect(gap2).toBeGreaterThan(GAP_IMPORTANT)
+  })
+})
