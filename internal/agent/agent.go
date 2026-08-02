@@ -213,8 +213,8 @@ func (r *Runner) projectMounts(projectID string) []string {
 // resolveProjectPath 把模型给的路径规范化到挂载目录内（3.2.1 工作目录 = 项目目录）。
 // - 相对路径/裸文件名 → join 到第一个挂载目录
 // - 绝对路径在挂载内 → 直接用
-// - 绝对路径不在挂载内 → strip 前导 / 再 join（模型常传 /main.go）
-// - 仍不在挂载目录 → 拒绝
+// - 绝对路径不在挂载内且是裸文件名（如 /main.go，模型幻觉）→ strip 前导 / 后 join
+// - 其他绝对路径（如 /tmp/x.go）→ 拒绝（可能是越界访问，不宽容）
 func resolveProjectPath(permEng *permission.Engine, p string) (string, error) {
 	mounts := permEng.Mounts()
 	if len(mounts) == 0 {
@@ -222,12 +222,17 @@ func resolveProjectPath(permEng *permission.Engine, p string) (string, error) {
 	}
 	root := mounts[0]
 	var candidates []string
-	if !filepath.IsAbs(p) {
+	switch {
+	case !filepath.IsAbs(p):
 		candidates = []string{filepath.Join(root, p)}
-	} else if permEng.Locate(p) {
+	case permEng.Locate(p):
 		candidates = []string{p}
-	} else {
-		candidates = []string{p, filepath.Join(root, strings.TrimPrefix(p, string(filepath.Separator)))}
+	case isBareFileName(p):
+		// 模型幻觉的根路径：/main.go → root/main.go
+		candidates = []string{filepath.Join(root, strings.TrimPrefix(p, string(filepath.Separator)))}
+	default:
+		// /tmp/evil.txt 这类绝对路径 → 拒绝（越界）
+		return "", fmt.Errorf("路径 %s 超出项目挂载目录", p)
 	}
 	for _, cand := range candidates {
 		abs, err := filepath.Abs(cand)
@@ -239,6 +244,13 @@ func resolveProjectPath(permEng *permission.Engine, p string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("路径 %s 超出项目挂载目录", p)
+}
+
+// isBareFileName 判断绝对路径是否只是一个裸文件名（无目录分隔符），
+// 如 /main.go 是模型把"main.go"误拼成根路径的幻觉。
+func isBareFileName(p string) bool {
+	trimmed := strings.TrimPrefix(p, string(filepath.Separator))
+	return trimmed != "" && !strings.Contains(trimmed, string(filepath.Separator))
 }
 
 // registerTools 注册基础工具（里程碑1：read_file/list_dir/echo/write_file/edit_file）。
