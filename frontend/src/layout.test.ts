@@ -131,3 +131,46 @@ describe('相切约束', () => {
     expect(r[r.length - 1].y - r[r.length - 2].y).toBeCloseTo(12, 5)
   })
 })
+
+describe('虚节点按重要节点规则', () => {
+  it('链尾虚节点与其前大节点间距 ≥ 6D', () => {
+    const nodes = [
+      node('a', { important: true }),
+      node('n1'),
+      node('n2'),
+      node('n3'),
+      node('g', { ghost: true }), // 链尾虚节点
+    ]
+    const r = computeLayout(nodes)
+    // 虚节点 g 与重要节点 a 之间：中间 3 个普通节点，段长 = max(6D, 12+2*8+12=44) = 96
+    const gap = r[4].y - r[0].y
+    expect(gap).toBeGreaterThanOrEqual(GAP_IMPORTANT)
+  })
+
+  it('链首虚节点与重要节点之间按 6D', () => {
+    const nodes = [
+      node('g', { ghost: true }),
+      node('a', { important: true }),
+    ]
+    const r = computeLayout(nodes)
+    expect(r[1].y - r[0].y).toBeGreaterThanOrEqual(GAP_IMPORTANT)
+  })
+
+  it('虚节点-普通节点相邻：6D 主导时均匀分配，不重叠', () => {
+    const nodes = [
+      node('g', { ghost: true }),
+      node('s'),
+      node('z', { important: true }),
+    ]
+    const r = computeLayout(nodes)
+    // g、z 都是大节点，中间 1 个普通节点：段长 = 6D = 96
+    const gap = r[2].y - r[0].y
+    expect(gap).toBeCloseTo(GAP_IMPORTANT, 5)
+    // 均匀填充：s 在 g 和 z 正中间
+    expect(r[1].y).toBeCloseTo((r[0].y + r[2].y) / 2, 5)
+    // 不重叠：每段 ≥ 相切
+    expect(r[1].y - r[0].y).toBeGreaterThanOrEqual(12)
+    expect(r[2].y - r[1].y).toBeGreaterThanOrEqual(12)
+  })
+})
+

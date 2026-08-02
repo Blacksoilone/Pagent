@@ -204,11 +204,11 @@ onMounted(refresh)
             <!-- 珠子 -->
             <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
               <circle
-                :r="it.node.important ? diamBig / 2 : (it.node.ghost ? 4 : diamSmall / 2)"
+                :r="(it.node.important || it.node.ghost) ? diamBig / 2 : diamSmall / 2"
                 :fill="it.node.important ? '#2a6db5' : (it.node.ghost ? 'none' : '#7fa8d9')"
                 :stroke="it.node.important ? '#1a4f8a' : (it.node.ghost ? '#7fa8d9' : 'none')"
-                :stroke-width="it.node.ghost ? 1.5 : 0"
-                :stroke-dasharray="it.node.ghost ? '2,2' : 'none'"
+                :stroke-width="it.node.ghost ? 2 : (it.node.important ? 0 : 0)"
+                :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
                 :opacity="it.status === 'partial' ? 0.5 : 1"
               />
             </g>
