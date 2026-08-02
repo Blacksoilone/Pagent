@@ -30,6 +30,7 @@ export interface LayoutOptions {
   diamSmall?: number  // 普通节点直径
   diamBig?: number    // 重要节点/虚节点直径
   gapImportant?: number // 重要节点最小中心距
+  gapSmallMultiplier?: number // 小点间距 = 倍数 × 直径（点之间，默认 2）
   lineWidth?: number  // 链线粗细
   colorSmall?: string // 普通节点颜色
   colorBig?: string   // 重要节点颜色
@@ -40,6 +41,7 @@ export const DEFAULT_OPTIONS: LayoutOptions = {
   diamSmall: DIAM_SMALL,
   diamBig: DIAM_BIG,
   gapImportant: GAP_IMPORTANT,
+  gapSmallMultiplier: 2,
   lineWidth: 2.5,
   colorSmall: '#7fa8d9',
   colorBig: '#2a6db5',
@@ -51,6 +53,7 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
     diamSmall: options?.diamSmall ?? DIAM_SMALL,
     diamBig: options?.diamBig ?? DIAM_BIG,
     gapImportant: options?.gapImportant ?? GAP_IMPORTANT,
+    gapSmallMultiplier: options?.gapSmallMultiplier ?? DEFAULT_OPTIONS.gapSmallMultiplier!,
     lineWidth: options?.lineWidth ?? DEFAULT_OPTIONS.lineWidth,
     colorSmall: options?.colorSmall ?? DEFAULT_OPTIONS.colorSmall,
     colorBig: options?.colorBig ?? DEFAULT_OPTIONS.colorBig,
@@ -59,6 +62,7 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
   const d = opt.diamSmall
   const D = opt.diamBig
   const gapImp = opt.gapImportant
+  const smallGap = opt.gapSmallMultiplier * d // 小点之间圆心距（点之间 = 倍数×直径）
   const R_SMALL = d / 2
   const R_BIG = D / 2
 
@@ -90,13 +94,11 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
     // 基础段 = A→n1 相切 + 中间相切 + nk→B 相切；k=0 时两个大节点相切 2R_BIG
     const baseTotal = k === 0
       ? 2 * R_BIG
-      : (R_SMALL + R_BIG) + (k - 1) * d + (R_SMALL + R_BIG)
+      : (R_SMALL + R_BIG) + (k - 1) * smallGap + (R_SMALL + R_BIG)
     const segLen = Math.max(gapImp, baseTotal)
     const extra = segLen - baseTotal
 
-    // 各段长度：首尾相切段 + 中间相切段。
-    // 富余空间只分配到首尾段（大点与小点之间）——小点之间保持固定间距 d，
-    // 调整大点间距不影响小点节奏。
+    // 各段长度：首尾相切段 + 中间小点段，富余均匀分配到所有段
     const segCount = k + 1
     const segs: number[] = []
     for (let i = 0; i < segCount; i++) {
@@ -104,15 +106,9 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
       if (k === 0) {
         base = 2 * R_BIG
       } else {
-        base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : d
+        base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : smallGap
       }
-      segs.push(base)
-    }
-    if (segCount >= 2 && extra > 0) {
-      segs[0] += extra / 2
-      segs[segCount - 1] += extra / 2
-    } else if (segCount === 1) {
-      segs[0] += extra
+      segs.push(base + extra / segCount)
     }
 
     let pos = startY
@@ -127,7 +123,7 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
   // 兜底：若某位置未赋值（如仅 1 个节点），按大节点补
   for (let i = 0; i < n; i++) {
     if (!result[i]) {
-      result[i] = { node: nodes[i], y: R_BIG + i * d, big: isBigAt(i) }
+      result[i] = { node: nodes[i], y: R_BIG + i * smallGap, big: isBigAt(i) }
     }
   }
 

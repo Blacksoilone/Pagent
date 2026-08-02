@@ -22,6 +22,7 @@ function loadSettings(): Required<LayoutOptions> {
     diamSmall: DEFAULT_OPTIONS.diamSmall!,
     diamBig: DEFAULT_OPTIONS.diamBig!,
     gapImportant: DEFAULT_OPTIONS.gapImportant!,
+    gapSmallMultiplier: DEFAULT_OPTIONS.gapSmallMultiplier!,
     lineWidth: DEFAULT_OPTIONS.lineWidth!,
     colorSmall: DEFAULT_OPTIONS.colorSmall!,
     colorBig: DEFAULT_OPTIONS.colorBig!,
@@ -263,6 +264,11 @@ onMounted(refresh)
             <label>普通节点直径</label>
             <input type="range" min="4" max="24" step="1" v-model.number="layoutSettings.diamSmall" @input="saveSettings" />
             <span class="setting-val">{{ layoutSettings.diamSmall }}px</span>
+          </div>
+          <div class="setting-row">
+            <label>小点间距</label>
+            <input type="range" min="0.5" max="4" step="0.5" v-model.number="layoutSettings.gapSmallMultiplier" @input="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.gapSmallMultiplier }}×d</span>
           </div>
           <div class="setting-row">
             <label>重要节点直径</label>
