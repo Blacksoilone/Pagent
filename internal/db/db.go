@@ -270,14 +270,17 @@ func (d *DB) ListChainNodes(chainID string) ([]*model.Node, error) {
 	for rows.Next() {
 		n := &model.Node{ChainID: chainID}
 		var visible int
-		var parent sql.NullString
+		var parent, title, summary, copiedFrom sql.NullString
 		var seq int
-		if err := rows.Scan(&n.ID, &seq, &parent, &n.Kind, &n.Status, &n.Title, &n.Summary, &visible, &n.CopiedFrom); err != nil {
+		if err := rows.Scan(&n.ID, &seq, &parent, &n.Kind, &n.Status, &title, &summary, &visible, &copiedFrom); err != nil {
 			return nil, err
 		}
 		if parent.Valid {
 			n.ParentID = parent.String
 		}
+		n.Title = title.String
+		n.Summary = summary.String
+		n.CopiedFrom = copiedFrom.String
 		n.Visible = visible == 1
 		nodes = append(nodes, n)
 	}

@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, nextTick } from 'vue'
+import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
+import { computeLayout, DIAM_SMALL, DIAM_BIG, type LayoutNode } from './layout'
+
+// 模板可访问的直径常量
+const diamSmall = DIAM_SMALL
+const diamBig = DIAM_BIG
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -93,6 +98,29 @@ function scrollToBottom() {
   })
 }
 
+interface LayoutResultWithStatus {
+  node: LayoutNode
+  y: number
+  status: string
+}
+
+const braceletItems = computed<LayoutResultWithStatus[]>(() => {
+  const lns: LayoutNode[] = nodes.value.map(n => ({
+    id: n.id,
+    important: n.kind === 'important',
+    ghost: n.kind === 'ghost',
+  }))
+  const laid = computeLayout(lns)
+  const statusById = new Map(nodes.value.map(n => [n.id, n.status]))
+  return laid.map(it => ({ ...it, status: statusById.get(it.node.id) || 'done' } as LayoutResultWithStatus))
+})
+
+const braceletHeight = computed(() => {
+  if (braceletItems.value.length === 0) return 80
+  const last = braceletItems.value[braceletItems.value.length - 1]
+  return last.y + 20
+})
+
 onMounted(refresh)
 </script>
 
@@ -162,22 +190,30 @@ onMounted(refresh)
         </div>
       </main>
 
-      <!-- 链视图 -->
+      <!-- 链视图（手串） -->
       <main v-else class="graph-main">
         <div class="graph-toolbar">
           <span>{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
           <span class="node-count">{{ nodes.length }} 个节点</span>
         </div>
-        <svg class="chain-svg" :viewBox="'0 0 400 ' + Math.max(300, nodes.length * 60 + 40)">
-          <line v-for="(_, i) in nodes.filter(x => x.kind !== 'ghost')" :key="'l' + i"
-            x1="200" :y1="40 + i * 60" x2="200" :y2="40 + (i + 1) * 60"
-            stroke="#4a90d9" stroke-width="2" opacity="0.4" />
-          <g v-for="(n, i) in nodes" :key="n.id" :transform="'translate(200,' + (40 + i * 60) + ')'">
-            <circle v-if="n.kind !== 'ghost'" :r="n.kind === 'important' ? 7 : 4"
-              :fill="n.status === 'partial' ? '#888' : '#4a90d9'" />
-            <circle v-else r="5" fill="none" stroke="#4a90d9" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5" />
-          </g>
-        </svg>
+        <div class="bracelet-wrap">
+          <svg class="chain-svg" :viewBox="'0 0 200 ' + (braceletHeight + 40)" width="200">
+            <!-- 链线（串绳） -->
+            <line x1="100" :y1="8" x2="100" :y2="braceletHeight - 8"
+              stroke="#d8d3c8" stroke-width="2.5" stroke-linecap="round" opacity="0.6" />
+            <!-- 珠子 -->
+            <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
+              <circle
+                :r="it.node.important ? diamBig / 2 : (it.node.ghost ? 4 : diamSmall / 2)"
+                :fill="it.node.important ? '#2a6db5' : (it.node.ghost ? 'none' : '#7fa8d9')"
+                :stroke="it.node.important ? '#1a4f8a' : (it.node.ghost ? '#7fa8d9' : 'none')"
+                :stroke-width="it.node.ghost ? 1.5 : 0"
+                :stroke-dasharray="it.node.ghost ? '2,2' : 'none'"
+                :opacity="it.status === 'partial' ? 0.5 : 1"
+              />
+            </g>
+          </svg>
+        </div>
       </main>
 
       <!-- 输入区 -->
@@ -268,7 +304,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 .graph-main { flex: 1; overflow: auto; padding: 16px; }
 .graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
-.chain-svg { width: 100%; min-height: 300px; }
+.bracelet-wrap { display: flex; justify-content: center; }
+.chain-svg { min-height: 300px; }
 
 .input-area { border-top: 1px solid #ececf1; padding: 12px 20px 16px; background: #fff; }
 .input-box {
