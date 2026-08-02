@@ -514,6 +514,25 @@ func (d *DB) ListProjects() ([]*model.Project, error) {
 	return out, rows.Err()
 }
 
+// ListChainsByProject 列出指定项目的全部链。
+func (d *DB) ListChainsByProject(projectID string) ([]*model.Chain, error) {
+	const q = `SELECT id, project_id, name, status FROM chain WHERE project_id = ? ORDER BY created_at`
+	rows, err := d.raw.Query(q, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*model.Chain
+	for rows.Next() {
+		c := &model.Chain{}
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Name, &c.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListChains 列出项目下的全部链。
 func (d *DB) ListChains() ([]*model.Chain, error) {
 	const q = `SELECT id, project_id, name, status FROM chain ORDER BY created_at`

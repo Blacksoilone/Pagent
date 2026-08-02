@@ -98,3 +98,15 @@ export async function chat(
     }
   }
 }
+
+export interface ProjectDTO {
+  id: string
+  name: string
+  chains: ChainDTO[]
+}
+
+export async function fetchProjects(): Promise<ProjectDTO[]> {
+  const res = await fetch('/api/projects')
+  if (!res.ok) throw new Error('fetch projects: ' + res.status)
+  return res.json()
+}

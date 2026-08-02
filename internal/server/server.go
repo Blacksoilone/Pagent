@@ -36,6 +36,7 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/chains", s.handleChains)
 	mux.HandleFunc("POST /api/chains", s.handleCreateChain)
+	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
@@ -64,6 +65,35 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// ProjectDTO 项目的 API 表示（含链）。
+type ProjectDTO struct {
+	ID     string     `json:"id"`
+	Name   string     `json:"name"`
+	Chains []ChainDTO `json:"chains"`
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	out := make([]ProjectDTO, 0, len(projects))
+	for _, p := range projects {
+		chains, err := s.store.ListChainsByProject(p.ID)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		cds := make([]ChainDTO, 0, len(chains))
+		for _, ch := range chains {
+			cds = append(cds, ChainDTO{ID: ch.ID, Name: ch.Name, Status: ch.Status})
+		}
+		out = append(out, ProjectDTO{ID: p.ID, Name: p.Name, Chains: cds})
+	}
+	writeJSON(w, 200, out)
 }
 
 // ChainDTO 链的 API 表示。

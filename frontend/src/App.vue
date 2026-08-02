@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref, nextTick } from 'vue'
-import { chat, fetchChainNodes, fetchChains, type ChainDTO, type NodeDTO } from './api'
+import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
 
 // ── 状态 ──
+const projects = ref<ProjectDTO[]>([])
 const chains = ref<ChainDTO[]>([])
 const selectedChain = ref<string>('')
 const nodes = ref<NodeDTO[]>([])
@@ -10,11 +11,17 @@ const messages = ref<Array<{ role: string; content: string }>>([])
 const input = ref('')
 const streaming = ref(false)
 const toolLog = ref<string[]>([])
-const view = ref<'chat' | 'graph'>('chat') // chat=对话视图（默认） graph=链视图
+const view = ref<'chat' | 'graph'>('chat')
+const expandedProject = ref<string | null>(null) // 展开的项目（树形）
 const scrollBox = ref<HTMLElement | null>(null)
 
 async function refresh() {
-  chains.value = await fetchChains()
+  const [pr, chs] = await Promise.all([fetchProjects(), fetchChains()])
+  projects.value = pr
+  chains.value = chs
+  if (projects.value.length > 0 && !expandedProject.value) {
+    expandedProject.value = projects.value[0].id
+  }
   if (chains.value.length > 0 && !chains.value.find(c => c.id === selectedChain.value)) {
     selectedChain.value = chains.value[0].id
   }
@@ -33,12 +40,19 @@ async function ensureChain(): Promise<string | null> {
     })
     if (!res.ok) return null
     const ch = await res.json() as ChainDTO
-    chains.value = [ch]
+    await refresh()
     selectedChain.value = ch.id
     return ch.id
   }
   selectedChain.value = chains.value[0].id
   return selectedChain.value
+}
+
+async function selectChain(id: string) {
+  if (streaming.value) return
+  selectedChain.value = id
+  nodes.value = await fetchChainNodes(id)
+  messages.value = []
 }
 
 async function send() {
@@ -50,7 +64,7 @@ async function send() {
   streaming.value = true
   toolLog.value = []
   messages.value.push({ role: 'user', content: msg })
-  messages.value.push({ role: 'assistant', content: '' }) // 流式占位
+  messages.value.push({ role: 'assistant', content: '' })
   const aiIdx = messages.value.length - 1
   try {
     await chat(chainId, msg, (ev) => {
@@ -84,99 +98,147 @@ onMounted(refresh)
 
 <template>
   <div class="app">
-    <!-- 顶部栏 -->
-    <header class="topbar">
-      <div class="brand">Pagent</div>
-      <div class="chain-select" v-if="chains.length > 0">
-        <select :value="selectedChain" @change="selectedChain = ($event.target as HTMLSelectElement).value; refresh()">
-          <option v-for="c in chains" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+    <!-- 左侧边栏：项目 + session 列表 -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">Pagent</div>
+
+      <!-- 上：项目列表（树形） -->
+      <div class="sidebar-section">
+        <div class="section-label">项目</div>
+        <div v-for="p in projects" :key="p.id" class="project-item">
+          <div class="project-row" @click="expandedProject = expandedProject === p.id ? null : p.id">
+            <span class="caret" :class="{ open: expandedProject === p.id }">▸</span>
+            <span class="project-name">{{ p.name }}</span>
+          </div>
+          <div v-if="expandedProject === p.id" class="project-chains">
+            <div v-for="c in p.chains" :key="c.id"
+              class="chain-item" :class="{ active: c.id === selectedChain }"
+              @click="selectChain(c.id)">
+              {{ c.name }}
+            </div>
+          </div>
+        </div>
+        <div class="empty-hint" v-if="projects.length === 0">尚无项目</div>
       </div>
-      <div class="top-actions">
+
+      <!-- 下：session 列表 -->
+      <div class="sidebar-section bottom">
+        <div class="section-label">会话</div>
+        <div v-for="c in chains" :key="c.id"
+          class="session-item" :class="{ active: c.id === selectedChain }"
+          @click="selectChain(c.id)">
+          {{ c.name }}
+        </div>
+        <div class="empty-hint" v-if="chains.length === 0">尚无会话</div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <div class="main">
+      <!-- 顶部栏 -->
+      <header class="topbar">
+        <div class="current-chain">{{ chains.find(c => c.id === selectedChain)?.name || '新对话' }}</div>
         <button class="view-btn" @click="view = view === 'chat' ? 'graph' : 'chat'">
           {{ view === 'chat' ? '链视图' : '对话' }}
         </button>
-      </div>
-    </header>
+      </header>
 
-    <!-- 对话视图（默认） -->
-    <main v-if="view === 'chat'" class="chat-main" ref="scrollBox">
-      <div class="messages">
-        <div v-if="messages.length === 0" class="welcome">
-          <h1>Pagent</h1>
-          <p>多 Agent 对话工作空间</p>
-        </div>
-        <template v-for="(m, i) in messages" :key="i">
-          <div class="msg-row" :class="m.role">
-            <div class="avatar" v-if="m.role === 'assistant'">P</div>
-            <div class="bubble">{{ m.content }}<span v-if="streaming && i === messages.length - 1" class="cursor">▍</span></div>
+      <!-- 对话视图 -->
+      <main v-if="view === 'chat'" class="chat-main" ref="scrollBox">
+        <div class="messages">
+          <div v-if="messages.length === 0" class="welcome">
+            <h1>Pagent</h1>
+            <p>多 Agent 对话工作空间</p>
           </div>
-        </template>
-        <div class="tool-log" v-if="toolLog.length > 0">
-          <div v-for="(t, i) in toolLog" :key="'t' + i" class="tool-item">{{ t }}</div>
+          <template v-for="(m, i) in messages" :key="i">
+            <div class="msg-row" :class="m.role">
+              <div class="avatar" v-if="m.role === 'assistant'">P</div>
+              <div class="bubble">{{ m.content }}<span v-if="streaming && i === messages.length - 1" class="cursor">▍</span></div>
+            </div>
+          </template>
+          <div class="tool-log" v-if="toolLog.length > 0">
+            <div v-for="(t, i) in toolLog" :key="'t' + i" class="tool-item">{{ t }}</div>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
 
-    <!-- 链视图 -->
-    <main v-else class="graph-main">
-      <div class="graph-toolbar">
-        <span>链：{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
-        <span class="node-count">{{ nodes.length }} 个节点</span>
-      </div>
-      <svg class="chain-svg" :viewBox="'0 0 400 ' + Math.max(300, nodes.length * 60 + 40)">
-        <line v-for="(_, i) in nodes.filter(x => x.kind !== 'ghost')" :key="'l' + i"
-          x1="200" :y1="40 + i * 60" x2="200" :y2="40 + (i + 1) * 60"
-          stroke="#4a90d9" stroke-width="2" opacity="0.4" />
-        <g v-for="(n, i) in nodes" :key="n.id" :transform="'translate(200,' + (40 + i * 60) + ')'">
-          <circle v-if="n.kind !== 'ghost'" :r="n.kind === 'important' ? 7 : 4"
-            :fill="n.status === 'partial' ? '#888' : '#4a90d9'" />
-          <circle v-else r="5" fill="none" stroke="#4a90d9" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5" />
-        </g>
-      </svg>
-    </main>
+      <!-- 链视图 -->
+      <main v-else class="graph-main">
+        <div class="graph-toolbar">
+          <span>{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
+          <span class="node-count">{{ nodes.length }} 个节点</span>
+        </div>
+        <svg class="chain-svg" :viewBox="'0 0 400 ' + Math.max(300, nodes.length * 60 + 40)">
+          <line v-for="(_, i) in nodes.filter(x => x.kind !== 'ghost')" :key="'l' + i"
+            x1="200" :y1="40 + i * 60" x2="200" :y2="40 + (i + 1) * 60"
+            stroke="#4a90d9" stroke-width="2" opacity="0.4" />
+          <g v-for="(n, i) in nodes" :key="n.id" :transform="'translate(200,' + (40 + i * 60) + ')'">
+            <circle v-if="n.kind !== 'ghost'" :r="n.kind === 'important' ? 7 : 4"
+              :fill="n.status === 'partial' ? '#888' : '#4a90d9'" />
+            <circle v-else r="5" fill="none" stroke="#4a90d9" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5" />
+          </g>
+        </svg>
+      </main>
 
-    <!-- 输入区 -->
-    <footer class="input-area">
-      <div class="input-box">
-        <textarea
-          v-model="input"
-          rows="1"
-          placeholder="输入消息…"
-          :disabled="streaming"
-          @keydown.enter.exact.prevent="send"
-        ></textarea>
-        <button class="send-btn" :disabled="streaming || !input.trim()" @click="send">
-          <svg v-if="!streaming" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
-          </svg>
-          <span v-else class="spinner"></span>
-        </button>
-      </div>
-      <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
-    </footer>
+      <!-- 输入区 -->
+      <footer class="input-area">
+        <div class="input-box">
+          <textarea
+            v-model="input" rows="1" placeholder="输入消息…"
+            :disabled="streaming"
+            @keydown.enter.exact.prevent="send"
+          ></textarea>
+          <button class="send-btn" :disabled="streaming || !input.trim()" @click="send">
+            <svg v-if="!streaming" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
+            </svg>
+            <span v-else class="spinner"></span>
+          </button>
+        </div>
+        <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
+      </footer>
+    </div>
   </div>
 </template>
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; }
-.app { display: flex; flex-direction: column; height: 100vh; }
+.app { display: flex; height: 100vh; }
 
+/* 左侧边栏 */
+.sidebar {
+  width: 260px; background: #f9f9fb; border-right: 1px solid #ececf1;
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+.sidebar-brand { padding: 14px 16px 10px; font-size: 15px; font-weight: 600; color: #111; border-bottom: 1px solid #ececf1; }
+.sidebar-section { padding: 8px 0; overflow-y: auto; }
+.sidebar-section.bottom { border-top: 1px solid #ececf1; flex: 1; }
+.section-label { padding: 8px 16px 4px; font-size: 11px; font-weight: 600; color: #8e8ea0; text-transform: uppercase; letter-spacing: 0.04em; }
+.project-row { display: flex; align-items: center; gap: 6px; padding: 7px 16px; cursor: pointer; font-size: 13px; color: #333; }
+.project-row:hover { background: #f0f0f4; }
+.caret { display: inline-block; transition: transform 0.15s; font-size: 10px; color: #8e8ea0; }
+.caret.open { transform: rotate(90deg); }
+.project-name { font-weight: 500; }
+.project-chains { padding-left: 30px; }
+.chain-item { padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #555; }
+.chain-item:hover { background: #f0f0f4; }
+.chain-item.active { background: #e8f0fa; color: #1a5fb4; font-weight: 500; }
+.session-item { padding: 8px 16px; cursor: pointer; font-size: 13px; color: #555; }
+.session-item:hover { background: #f0f0f4; }
+.session-item.active { background: #e8f0fa; color: #1a5fb4; font-weight: 500; }
+.empty-hint { padding: 8px 16px; font-size: 12px; color: #b0b0c0; }
+
+/* 主区 */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 8px 20px; border-bottom: 1px solid #ececf1;
-  background: #fff;
+  display: flex; align-items: center; padding: 8px 20px;
+  border-bottom: 1px solid #ececf1; background: #fff;
 }
-.brand { font-size: 15px; font-weight: 600; color: #111; }
-.chain-select select {
-  padding: 4px 8px; border: 1px solid #e0e0e0; border-radius: 6px;
-  font-size: 13px; color: #333; background: #fff;
-}
-.top-actions { margin-left: auto; }
+.current-chain { font-size: 14px; font-weight: 500; color: #333; }
 .view-btn {
-  padding: 6px 14px; border: 1px solid #d9d9e3; border-radius: 8px;
-  background: #fff; color: #333; font-size: 13px; cursor: pointer;
+  margin-left: auto; padding: 6px 14px; border: 1px solid #d9d9e3;
+  border-radius: 8px; background: #fff; color: #333; font-size: 13px; cursor: pointer;
 }
 .view-btn:hover { background: #f5f5f7; }
 
@@ -188,9 +250,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 .msg-row { display: flex; gap: 12px; margin-bottom: 24px; }
 .msg-row.user { justify-content: flex-end; }
-.msg-row.user .bubble {
-  background: #f0f0f5; color: #111; border-radius: 12px 12px 2px 12px;
-}
+.msg-row.user .bubble { background: #f0f0f5; color: #111; border-radius: 12px 12px 2px 12px; }
 .msg-row.assistant { justify-content: flex-start; }
 .avatar {
   width: 30px; height: 30px; border-radius: 8px; background: #111;
@@ -203,7 +263,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 }
 .cursor { animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-
 .tool-log { margin-top: 8px; }
 .tool-item { font-size: 12px; color: #8e8ea0; font-family: ui-monospace, monospace; padding: 3px 0; }
 
@@ -214,8 +273,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .input-area { border-top: 1px solid #ececf1; padding: 12px 20px 16px; background: #fff; }
 .input-box {
   max-width: 760px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
-  border: 1px solid #d9d9e3; border-radius: 12px; padding: 8px 8px 8px 16px;
-  background: #fff;
+  border: 1px solid #d9d9e3; border-radius: 12px; padding: 8px 8px 8px 16px; background: #fff;
 }
 .input-box:focus-within { border-color: #4a90d9; box-shadow: 0 0 0 2px rgba(74,144,217,0.15); }
 .input-box textarea {
