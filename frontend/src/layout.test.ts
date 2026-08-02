@@ -247,3 +247,43 @@ describe('自定义参数', () => {
     expect(DEFAULT_OPTIONS.gapImportant).toBe(GAP_IMPORTANT)
   })
 })
+
+describe('小点间距恒定（大点间距可调）', () => {
+  function build(k: number) {
+    const nodes: LayoutNode[] = [node('a', { important: true })]
+    for (let i = 0; i < k; i++) nodes.push(node('n' + i))
+    nodes.push(node('z', { important: true }))
+    return nodes
+  }
+
+  it('6 个小点：大点间距 96 vs 80，小点间距不变', () => {
+    const nodes = build(6)
+    // 基础段 = 12 + 5*8 + 12 = 64
+    const r96 = computeLayout(nodes, { diamSmall: 8, diamBig: 16, gapImportant: 96 })
+    const r80 = computeLayout(nodes, { diamSmall: 8, diamBig: 16, gapImportant: 80 })
+    // 大点间距：96 和 80（80 仍 > 基础段 64）
+    expect(r96[7].y - r96[0].y).toBeCloseTo(96, 5)
+    expect(r80[7].y - r80[0].y).toBeCloseTo(80, 5)
+    // 小点之间间距恒定（中间段 = d = 8）
+    for (let i = 1; i < 6; i++) {
+      expect(r96[i + 1].y - r96[i].y).toBeCloseTo(8, 5)
+      expect(r80[i + 1].y - r80[i].y).toBeCloseTo(8, 5)
+    }
+    // 富余在首尾段：96 时首尾 = 12 + (96-64)/2 = 28
+    expect(r96[1].y - r96[0].y).toBeCloseTo(28, 5)
+    expect(r96[7].y - r96[6].y).toBeCloseTo(28, 5)
+    // 80 时首尾 = 12 + (80-64)/2 = 20
+    expect(r80[1].y - r80[0].y).toBeCloseTo(20, 5)
+  })
+
+  it('大点间距低于基础段时被小点推开', () => {
+    const nodes = build(6)
+    const r = computeLayout(nodes, { diamSmall: 8, diamBig: 16, gapImportant: 40 })
+    // 基础段 64 > 40 → 段长 = 64
+    expect(r[7].y - r[0].y).toBeCloseTo(64, 5)
+    // 小点间距仍 8
+    for (let i = 1; i < 6; i++) {
+      expect(r[i + 1].y - r[i].y).toBeCloseTo(8, 5)
+    }
+  })
+})

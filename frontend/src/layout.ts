@@ -30,19 +30,31 @@ export interface LayoutOptions {
   diamSmall?: number  // 普通节点直径
   diamBig?: number    // 重要节点/虚节点直径
   gapImportant?: number // 重要节点最小中心距
+  lineWidth?: number  // 链线粗细
+  colorSmall?: string // 普通节点颜色
+  colorBig?: string   // 重要节点颜色
+  colorLine?: string  // 链线颜色
 }
 
 export const DEFAULT_OPTIONS: LayoutOptions = {
   diamSmall: DIAM_SMALL,
   diamBig: DIAM_BIG,
   gapImportant: GAP_IMPORTANT,
+  lineWidth: 2.5,
+  colorSmall: '#7fa8d9',
+  colorBig: '#2a6db5',
+  colorLine: '#d8d3c8',
 }
 
-export function computeLayout(nodes: LayoutNode[], options?: LayoutOptions): LayoutResult[] {
-  const opt: Required<LayoutOptions> = {
+export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptions>): LayoutResult[] {
+  const opt = {
     diamSmall: options?.diamSmall ?? DIAM_SMALL,
     diamBig: options?.diamBig ?? DIAM_BIG,
     gapImportant: options?.gapImportant ?? GAP_IMPORTANT,
+    lineWidth: options?.lineWidth ?? DEFAULT_OPTIONS.lineWidth,
+    colorSmall: options?.colorSmall ?? DEFAULT_OPTIONS.colorSmall,
+    colorBig: options?.colorBig ?? DEFAULT_OPTIONS.colorBig,
+    colorLine: options?.colorLine ?? DEFAULT_OPTIONS.colorLine,
   }
   const d = opt.diamSmall
   const D = opt.diamBig
@@ -82,7 +94,9 @@ export function computeLayout(nodes: LayoutNode[], options?: LayoutOptions): Lay
     const segLen = Math.max(gapImp, baseTotal)
     const extra = segLen - baseTotal
 
-    // 各段长度：首尾相切段 + 中间段，富余均匀分配
+    // 各段长度：首尾相切段 + 中间相切段。
+    // 富余空间只分配到首尾段（大点与小点之间）——小点之间保持固定间距 d，
+    // 调整大点间距不影响小点节奏。
     const segCount = k + 1
     const segs: number[] = []
     for (let i = 0; i < segCount; i++) {
@@ -92,7 +106,13 @@ export function computeLayout(nodes: LayoutNode[], options?: LayoutOptions): Lay
       } else {
         base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : d
       }
-      segs.push(base + extra / segCount)
+      segs.push(base)
+    }
+    if (segCount >= 2 && extra > 0) {
+      segs[0] += extra / 2
+      segs[segCount - 1] += extra / 2
+    } else if (segCount === 1) {
+      segs[0] += extra
     }
 
     let pos = startY

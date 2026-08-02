@@ -22,6 +22,10 @@ function loadSettings(): Required<LayoutOptions> {
     diamSmall: DEFAULT_OPTIONS.diamSmall!,
     diamBig: DEFAULT_OPTIONS.diamBig!,
     gapImportant: DEFAULT_OPTIONS.gapImportant!,
+    lineWidth: DEFAULT_OPTIONS.lineWidth!,
+    colorSmall: DEFAULT_OPTIONS.colorSmall!,
+    colorBig: DEFAULT_OPTIONS.colorBig!,
+    colorLine: DEFAULT_OPTIONS.colorLine!,
   }
   try {
     const raw = localStorage.getItem('pagent-layout')
@@ -42,11 +46,9 @@ const gapMultiplier = computed({
   },
 })
 function resetSettings() {
-  layoutSettings.value = {
-    diamSmall: DEFAULT_OPTIONS.diamSmall!,
-    diamBig: DEFAULT_OPTIONS.diamBig!,
-    gapImportant: DEFAULT_OPTIONS.gapImportant!,
-  }
+  layoutSettings.value = loadSettings()
+  localStorage.removeItem('pagent-layout')
+  layoutSettings.value = loadSettings()
   saveSettings()
 }
 const expandedProject = ref<string | null>(null) // 展开的项目（树形）
@@ -234,13 +236,14 @@ onMounted(refresh)
           <svg class="chain-svg" :viewBox="'0 0 200 ' + (braceletHeight + 40)" width="200">
             <!-- 链线（串绳） -->
             <line x1="100" :y1="8" x2="100" :y2="braceletHeight - 8"
-              stroke="#d8d3c8" stroke-width="2.5" stroke-linecap="round" opacity="0.6" />
+              :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
+              stroke-linecap="round" opacity="0.6" />
             <!-- 珠子 -->
             <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
               <circle
                 :r="it.big ? diamBig / 2 : diamSmall / 2"
-                :fill="it.node.ghost ? '#fff' : (it.big ? '#2a6db5' : '#7fa8d9')"
-                :stroke="it.node.ghost ? '#7fa8d9' : (it.big ? '#1a4f8a' : 'none')"
+                :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"
+                :stroke="it.node.ghost ? layoutSettings.colorSmall : (it.big ? layoutSettings.colorBig : 'none')"
                 :stroke-width="it.node.ghost ? 2 : 0"
                 :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
                 :opacity="it.status === 'partial' ? 0.5 : 1"
@@ -254,22 +257,50 @@ onMounted(refresh)
     <div v-if="showSettings" class="settings-overlay" @click.self="showSettings = false">
       <div class="settings-panel">
         <h3>链布局参数</h3>
-        <div class="setting-row">
-          <label>普通节点直径 (d)</label>
-          <input type="number" min="2" max="32" v-model.number="layoutSettings.diamSmall" @change="saveSettings" />
-          <span class="setting-hint">当前 {{ layoutSettings.diamSmall }}px</span>
+        <div class="settings-group">
+          <div class="group-title">尺寸</div>
+          <div class="setting-row">
+            <label>普通节点直径</label>
+            <input type="range" min="4" max="24" step="1" v-model.number="layoutSettings.diamSmall" @input="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.diamSmall }}px</span>
+          </div>
+          <div class="setting-row">
+            <label>重要节点直径</label>
+            <input type="range" min="8" max="48" step="1" v-model.number="layoutSettings.diamBig" @input="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.diamBig }}px</span>
+          </div>
+          <div class="setting-row">
+            <label>重要节点最小间距</label>
+            <input type="range" min="1" max="16" step="0.5" v-model.number="gapMultiplier" @input="saveSettings" />
+            <span class="setting-val">{{ gapMultiplier }}×D</span>
+          </div>
+          <div class="setting-row">
+            <label>链线粗细</label>
+            <input type="range" min="1" max="6" step="0.5" v-model.number="layoutSettings.lineWidth" @input="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.lineWidth }}px</span>
+          </div>
         </div>
-        <div class="setting-row">
-          <label>重要节点直径 (D)</label>
-          <input type="number" min="4" max="64" v-model.number="layoutSettings.diamBig" @change="saveSettings" />
-          <span class="setting-hint">当前 {{ layoutSettings.diamBig }}px</span>
+
+        <div class="settings-group">
+          <div class="group-title">颜色</div>
+          <div class="setting-row">
+            <label>普通节点</label>
+            <input type="color" v-model="layoutSettings.colorSmall" @change="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.colorSmall }}</span>
+          </div>
+          <div class="setting-row">
+            <label>重要节点</label>
+            <input type="color" v-model="layoutSettings.colorBig" @change="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.colorBig }}</span>
+          </div>
+          <div class="setting-row">
+            <label>链线</label>
+            <input type="color" v-model="layoutSettings.colorLine" @change="saveSettings" />
+            <span class="setting-val">{{ layoutSettings.colorLine }}</span>
+          </div>
         </div>
-        <div class="setting-row">
-          <label>重要节点最小间距 (×D)</label>
-          <input type="number" min="1" max="20" v-model.number="gapMultiplier" @change="saveSettings" />
-          <span class="setting-hint">= {{ layoutSettings.gapImportant }}px</span>
-        </div>
-        <div class="setting-actions">
+
+        <div class="settings-actions">
           <button @click="resetSettings">恢复默认</button>
           <button class="primary" @click="showSettings = false">完成</button>
         </div>
@@ -373,16 +404,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 }
 .settings-panel {
   background: #fff; border-radius: 12px; padding: 24px;
-  width: 360px; box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+  width: 420px; max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.15);
 }
 .settings-panel h3 { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
-.setting-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.settings-group { margin-bottom: 18px; }
+.group-title { font-size: 11px; font-weight: 600; color: #8e8ea0; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; }
+.setting-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .setting-row label { flex: 1; font-size: 13px; color: #333; }
-.setting-row input {
-  width: 70px; padding: 6px 8px; border: 1px solid #d9d9e3;
-  border-radius: 6px; font-size: 13px;
-}
-.setting-hint { font-size: 11px; color: #8e8ea0; width: 90px; }
+.setting-row input[type="range"] { flex: 1; min-width: 120px; }
+.setting-val { font-size: 11px; color: #8e8ea0; width: 60px; text-align: right; font-family: ui-monospace, monospace; }
 .setting-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .setting-actions button {
   padding: 7px 16px; border: 1px solid #d9d9e3; border-radius: 8px;
