@@ -206,7 +206,7 @@ onMounted(refresh)
             <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
               <circle
                 :r="it.big ? diamBig / 2 : diamSmall / 2"
-                :fill="it.node.ghost ? 'none' : (it.big ? '#2a6db5' : '#7fa8d9')"
+                :fill="it.node.ghost ? '#fff' : (it.big ? '#2a6db5' : '#7fa8d9')"
                 :stroke="it.node.ghost ? '#7fa8d9' : (it.big ? '#1a4f8a' : 'none')"
                 :stroke-width="it.node.ghost ? 2 : 0"
                 :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
