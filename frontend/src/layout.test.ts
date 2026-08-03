@@ -43,15 +43,15 @@ describe('computeLayout 手串布局', () => {
     ]
     const r = computeLayout(nodes)
     const gap = r[5].y - r[0].y
-    // 4 个普通节点需要 (4+1)*d = 5d = 40px，大于 6D=96？不，5*8=40 < 96
-    // 所以仍是最小 6D
-    expect(gap).toBeCloseTo(GAP_IMPORTANT)
-    // 普通节点均匀：相邻间距相等
+    // 基础段 = 28 + 3*24 + 28 = 128 > 96 → 小点主导
+    expect(gap).toBeCloseTo(28 + 3 * 24 + 28, 5)
+    // 普通节点均匀：相邻间距相等（富余 0）
     const d1 = r[2].y - r[1].y
     const d2 = r[3].y - r[2].y
     const d3 = r[4].y - r[3].y
-    expect(d1).toBeCloseTo(d2, 5)
-    expect(d2).toBeCloseTo(d3, 5)
+    expect(d1).toBeCloseTo(24, 5)
+    expect(d2).toBeCloseTo(24, 5)
+    expect(d3).toBeCloseTo(24, 5)
   })
 
   it('很多普通节点时扩展重要节点间距', () => {
@@ -62,8 +62,8 @@ describe('computeLayout 手串布局', () => {
     const r = computeLayout(nodes)
     const gap = r[r.length - 1].y - r[0].y
     expect(gap).toBeGreaterThan(GAP_IMPORTANT) // 已扩展
-    // 基础段 = 首尾相切(12+12) + 中间 19*16 = 328
-    expect(gap).toBeCloseTo(12 + 19 * (DIAM_SMALL * 2) + 12, 3)
+    // 基础段 = 首尾(28+28) + 中间 19*24 = 512
+    expect(gap).toBeCloseTo(28 + 19 * 24 + 28, 3)
   })
 
   it('虚节点按普通节点处理', () => {
@@ -127,15 +127,15 @@ describe('相切约束', () => {
     for (let i = 0; i < 20; i++) nodes.push(node('n' + i))
     nodes.push(node('z', { important: true }))
     const r = computeLayout(nodes)
-    // 段长 = 12 + 19*16 + 12 = 328（已超过 6D=96，不扩展富余）
+    // 段长 = 28 + 19*24 + 28 = 512（已超过 6D=96，不扩展富余）
     const gap = r[r.length - 1].y - r[0].y
-    expect(gap).toBeCloseTo(328, 5)
-    // 首段 = 12（大→小相切）
-    expect(r[1].y - r[0].y).toBeCloseTo(12, 5)
-    // 中间段 = 16（小点圆心距 = 2d）
-    expect(r[3].y - r[2].y).toBeCloseTo(16, 5)
-    // 尾段 = 12（小→大相切）
-    expect(r[r.length - 1].y - r[r.length - 2].y).toBeCloseTo(12, 5)
+    expect(gap).toBeCloseTo(512, 5)
+    // 首段 = 28（大→小：半径和+间隙）
+    expect(r[1].y - r[0].y).toBeCloseTo(28, 5)
+    // 中间段 = 24（小点：半径和+间隙）
+    expect(r[3].y - r[2].y).toBeCloseTo(24, 5)
+    // 尾段 = 28（小→大）
+    expect(r[r.length - 1].y - r[r.length - 2].y).toBeCloseTo(28, 5)
   })
 })
 
@@ -195,15 +195,15 @@ describe('6D 是最小值（可被小点数量推远）', () => {
     expect(gapWithK(1)).toBeCloseTo(GAP_IMPORTANT, 5)
   })
 
-  it('k=5：仍为 6D（基础段 88 < 96）', () => {
-    // 基础段 = 12 + 4*16 + 12 = 88 < 6D=96 → 6D 主导
-    expect(gapWithK(5)).toBeCloseTo(GAP_IMPORTANT, 5)
+  it('k=2：仍为 6D（基础段 80 < 96）', () => {
+    // 基础段 = 28 + 1*24 + 28 = 80 < 6D=96 → 6D 主导
+    expect(gapWithK(2)).toBeCloseTo(GAP_IMPORTANT, 5)
   })
 
-  it('k=6：超过 6D，小点距离主导（基础段 104 > 96）', () => {
-    // 基础段 = 12 + 5*16 + 12 = 104 > 96 → 小点主导
-    expect(gapWithK(6)).toBeCloseTo(12 + 5 * 16 + 12, 5)
-    expect(gapWithK(6)).toBeGreaterThan(GAP_IMPORTANT)
+  it('k=3：超过 6D，小点距离主导（基础段 104 > 96）', () => {
+    // 基础段 = 28 + 2*24 + 28 = 104 > 96 → 小点主导
+    expect(gapWithK(3)).toBeCloseTo(28 + 2 * 24 + 28, 5)
+    expect(gapWithK(3)).toBeGreaterThan(GAP_IMPORTANT)
   })
 
   it('两个区间独立：一个小点区间 6D，多小点区间扩展', () => {
@@ -218,9 +218,9 @@ describe('6D 是最小值（可被小点数量推远）', () => {
     const ia = 0, ib = 2, ic = r.length - 1
     // 区间1 (a→b)：1个小点 → 6D
     expect(r[ib].y - r[ia].y).toBeCloseTo(GAP_IMPORTANT, 5)
-    // 区间2 (b→c)：15个小点 → 基础段 = 12+14*16+12 = 248 > 96
+    // 区间2 (b→c)：15个小点 → 基础段 = 28+14*24+28 = 392 > 96
     const gap2 = r[ic].y - r[ib].y
-    expect(gap2).toBeCloseTo(12 + 14 * 16 + 12, 5)
+    expect(gap2).toBeCloseTo(28 + 14 * 24 + 28, 5)
     expect(gap2).toBeGreaterThan(GAP_IMPORTANT)
   })
 })
@@ -256,23 +256,23 @@ describe('小点间距恒定（大点间距可调）', () => {
     return nodes
   }
 
-  it('5 个小点：富余分到所有段，小点间距 ≥ 基准', () => {
-    const nodes = build(5)
-    // 基础段 = 12 + 4*16 + 12 = 88；段长 = max(96, 88) = 96
+  it('2 个小点：富余分到所有段，小点间距 ≥ 基准', () => {
+    const nodes = build(2)
+    // 基础段 = 28 + 1*24 + 28 = 80；段长 = max(96, 80) = 96
     const r96 = computeLayout(nodes, { diamSmall: 8, diamBig: 16, gapImportant: 96 })
-    expect(r96[6].y - r96[0].y).toBeCloseTo(96, 5)
-    // 富余 96-88=8 分到 6 段 → 每段 +1.33
-    // 小点之间 ≈ 16 + 1.33 = 17.33
-    const midGap = r96[3].y - r96[2].y
-    expect(midGap).toBeCloseTo(16 + 8 / 6, 5)
+    expect(r96[3].y - r96[0].y).toBeCloseTo(96, 5)
+    // 富余 96-80=16 分到 3 段 → 每段 +5.33
+    // 小点之间 ≈ 24 + 5.33 = 29.33
+    const midGap = r96[2].y - r96[1].y
+    expect(midGap).toBeCloseTo(24 + 16 / 3, 5)
   })
 
   it('大点间距低于基础段时被小点推开', () => {
-    const nodes = build(5)
+    const nodes = build(2)
     const r = computeLayout(nodes, { diamSmall: 8, diamBig: 16, gapImportant: 40 })
-    // 基础段 88 > 40 → 段长 = 88
-    expect(r[6].y - r[0].y).toBeCloseTo(88, 5)
-    // 小点之间间距 = 16（富余 0）
-    expect(r[3].y - r[2].y).toBeCloseTo(16, 5)
+    // 基础段 80 > 40 → 段长 = 80
+    expect(r[3].y - r[0].y).toBeCloseTo(80, 5)
+    // 小点之间间距 = 24（富余 0）
+    expect(r[2].y - r[1].y).toBeCloseTo(24, 5)
   })
 })

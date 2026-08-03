@@ -62,9 +62,13 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
   const d = opt.diamSmall
   const D = opt.diamBig
   const gapImp = opt.gapImportant
-  const smallGap = opt.gapSmallMultiplier * d // 小点之间圆心距（点之间 = 倍数×直径）
   const R_SMALL = d / 2
   const R_BIG = D / 2
+  const gap = opt.gapSmallMultiplier * d // 点之间间隙（所有相邻点对统一）
+  // 圆心距 = 半径和 + 点间隙
+  const gapSS = R_SMALL + R_SMALL + gap // 小-小
+  const gapSB = R_SMALL + R_BIG + gap   // 小-大
+  const gapBB = R_BIG + R_BIG + gap     // 大-大（k=0 基础）
 
   const n = nodes.length
   if (n === 0) return []
@@ -93,8 +97,8 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
 
     // 基础段 = A→n1 相切 + 中间相切 + nk→B 相切；k=0 时两个大节点相切 2R_BIG
     const baseTotal = k === 0
-      ? 2 * R_BIG
-      : (R_SMALL + R_BIG) + (k - 1) * smallGap + (R_SMALL + R_BIG)
+      ? gapBB
+      : gapSB + (k - 1) * gapSS + gapSB
     const segLen = Math.max(gapImp, baseTotal)
     const extra = segLen - baseTotal
 
@@ -104,9 +108,9 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
     for (let i = 0; i < segCount; i++) {
       let base: number
       if (k === 0) {
-        base = 2 * R_BIG
+        base = gapBB
       } else {
-        base = (i === 0 || i === segCount - 1) ? R_SMALL + R_BIG : smallGap
+        base = (i === 0 || i === segCount - 1) ? gapSB : gapSS
       }
       segs.push(base + extra / segCount)
     }
@@ -123,7 +127,7 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
   // 兜底：若某位置未赋值（如仅 1 个节点），按大节点补
   for (let i = 0; i < n; i++) {
     if (!result[i]) {
-      result[i] = { node: nodes[i], y: R_BIG + i * smallGap, big: isBigAt(i) }
+      result[i] = { node: nodes[i], y: R_BIG + i * gapSS, big: isBigAt(i) }
     }
   }
 
