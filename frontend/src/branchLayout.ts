@@ -23,6 +23,8 @@ export interface BranchLayoutItem {
   x: number          // 分支的 x 位置
   items: (LayoutResult & { status: string; nodeId: string; parentId: string })[]
   level: number      // fork 层级（主链=0）
+  topY: number       // 分支链线起点（fork 分支从 fork 点开始）
+  bottomY: number    // 分支链线终点（该分支最后节点）
   forkFrom?: {       // 从哪个节点分出的（画弧线用）
     parentBranch: string
     parentY: number
@@ -104,13 +106,6 @@ export function computeBranchLayout(
     const level = levelMap.get(b) ?? 0
     const x = 100 + level * BRANCH_X_OFFSET
 
-    const items = laid.map((it, i) => ({
-      ...it,
-      status: sorted[i].status,
-      nodeId: sorted[i].id,
-      parentId: sorted[i].parentId,
-    }))
-
     // fork 弧线起点：分支根节点的 parent 在父分支上的位置
     let forkFrom: BranchLayoutItem['forkFrom']
     const parentBranch = parentBranchMap.get(b)
@@ -126,7 +121,24 @@ export function computeBranchLayout(
       }
     }
 
-    const branchItem: BranchLayoutItem = { branch: b, x, items, level, forkFrom }
+    // 布局（从顶部开始）
+    let items = laid.map((it, i) => ({
+      ...it,
+      status: sorted[i].status,
+      nodeId: sorted[i].id,
+      parentId: sorted[i].parentId,
+    }))
+
+    // 倒 Y：fork 分支整体平移，使第一个节点（虚节点）对齐 fork 点的 y
+    if (forkFrom && items.length > 0) {
+      const shift = forkFrom.parentY - items[0].y
+      items = items.map(it => ({ ...it, y: it.y + shift }))
+    }
+
+    // 分支链线范围：fork 分支从第一个节点开始（不延伸到顶部）
+    const topY = items.length > 0 ? (level === 0 ? 8 : items[0].y) : 8
+    const bottomY = items.length > 0 ? items[items.length - 1].y : 8
+    const branchItem: BranchLayoutItem = { branch: b, x, items, level, topY, bottomY, forkFrom }
     branches.push(branchItem)
     if (laid.length > 0) {
       maxY = Math.max(maxY, laid[laid.length - 1].y + 20)

@@ -244,8 +244,8 @@ onMounted(refresh)
               :stroke="layoutSettings.colorLine" :stroke-width="1.5" fill="none" opacity="0.4" stroke-dasharray="4,3" />
             <!-- 每条分支 -->
             <g v-for="b in branchResult.branches" :key="'br-' + b.branch">
-              <!-- 链线（串绳） -->
-              <line :x1="b.x" :y1="8" :x2="b.x" :y2="braceletHeight - 8"
+              <!-- 链线（串绳）：只画该分支自己的范围（倒 Y，fork 分支从 fork 点开始） -->
+              <line :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
                 :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
                 stroke-linecap="round" opacity="0.6" />
               <!-- 珠子 -->
