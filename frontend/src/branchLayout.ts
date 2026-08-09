@@ -1,9 +1,11 @@
-// 分支布局：fork 链以树杈方式展开。
+// 分支布局：fork 链以"倒 Y"方式展开。
 //
 // 规则：
-// - 每条分支是一条直链（竖直手串），x 位置按 fork 层级偏移
-// - 分支根节点的 parent 位于父分支上 → 画弧线连接（fork 点）
-// - 所有分支地位相同，无主链
+// - 两条链都从 fork 点分叉向下（二叉树式），无主链
+// - fork 分支的节点序列 = [fork 点锚点] + 分支自己的节点
+//   （锚点 = 分支根节点的 parent，位于父分支上）
+// - 分支从锚点的 y 位置开始向下，虚节点在每条链的末尾（时间向下）
+// - 分支 x 位置：主链=100，fork 分支=180（二叉树分叉）
 
 import { computeLayout, type LayoutNode, type LayoutResult, type LayoutOptions } from './layout'
 
@@ -22,18 +24,14 @@ export interface BranchLayoutItem {
   branch: string
   x: number          // 分支的 x 位置
   items: (LayoutResult & { status: string; nodeId: string; parentId: string })[]
-  level: number      // fork 层级（主链=0）
-  topY: number       // 分支链线起点（fork 分支从 fork 点开始）
-  bottomY: number    // 分支链线终点（该分支最后节点）
-  forkFrom?: {       // 从哪个节点分出的（画弧线用）
-    parentBranch: string
-    parentY: number
-  }
+  anchorNodeId: string // 分支的起点节点（fork 分支 = 父分支上的锚点）
+  topY: number       // 链线起点（锚点的 y）
+  bottomY: number    // 链线终点（该分支最后节点）
 }
 
 export const BRANCH_X_OFFSET = 80 // 每级 fork 的水平偏移
 
-// 弧线路径：从 fork 点 (x1,y1) 到分支首节点 (x2,y2)
+// 弧线路径：从父链锚点 (x1,y1) 到子链锚点 (x2,y2)——实际是共享锚点，不需要弧线
 export function forkArc(x1: number, y1: number, x2: number, y2: number): string {
   const dx = x2 - x1
   const cpx = x1 + dx * 0.5
@@ -53,95 +51,96 @@ export function computeBranchLayout(
     groups.get(n.branch)!.push(n)
   }
 
-  // 2. 确定层级：分支根（copiedFrom 非空或首个）的 parent 所在分支 = 父分支
-  //    主分支 = copiedFrom 为空的第一个分支
-  const branches: BranchLayoutItem[] = []
-  const branchById = new Map<string, BranchNode[]>(groups)
+  // 2. 确定分支层级与父分支
+  //    主分支 = 根节点没有 copiedFrom（未被 fork 出）
   const levelMap = new Map<string, number>()
   const parentBranchMap = new Map<string, string>()
+  const anchorMap = new Map<string, BranchNode>() // 分支 → 锚点（父分支上的节点）
 
-  // 找主分支：根节点没有 copiedFrom（未被 fork 出的）
+  // 找主分支
   let mainBranch = ''
-  for (const [b, ns] of branchById) {
+  for (const [b, ns] of groups) {
     const isForked = ns.some(n => n.copiedFrom)
     if (!isForked) { mainBranch = b; break }
   }
-  if (!mainBranch) mainBranch = [...branchById.keys()][0]
-
+  if (!mainBranch) mainBranch = [...groups.keys()][0]
   levelMap.set(mainBranch, 0)
 
-  // BFS 确定 fork 层级：某分支根的 parent 在哪个分支，level = 父 level + 1
-  const computeLevels = (branchId: string) => {
-    const children = [...branchById.keys()].filter(b => {
-      if (b === branchId || levelMap.has(b)) return false
-      const ns = branchById.get(b)!
-      const root = ns.find(n => n.copiedFrom) || ns[0]
-      const parent = nodes.find(n => n.id === root.parentId)
-      return parent && parent.branch === branchId
-    })
-    for (const child of children) {
-      levelMap.set(child, (levelMap.get(branchId) ?? 0) + 1)
-      parentBranchMap.set(child, branchId)
-      computeLevels(child)
+  // 计算每级 fork：分支根的 parent = 锚点（位于父分支）
+  for (const [b, ns] of groups) {
+    if (b === mainBranch) continue
+    const root = ns.find(n => n.copiedFrom) || ns[0]
+    const anchor = nodes.find(n => n.id === root.parentId)
+    if (anchor) {
+      anchorMap.set(b, anchor)
+      parentBranchMap.set(b, anchor.branch)
+      levelMap.set(b, (levelMap.get(anchor.branch) ?? 0) + 1)
     }
   }
-  computeLevels(mainBranch)
-
   // 兜底：未定级的设为 1
-  for (const b of branchById.keys()) {
+  for (const b of groups.keys()) {
     if (!levelMap.has(b)) levelMap.set(b, 1)
   }
 
   // 3. 布局每条分支
+  const branches: BranchLayoutItem[] = []
   let maxY = 0
   let maxX = 0
-  for (const [b, ns] of branchById) {
+
+  // 主分支先布局（其他分支的锚点 y 依赖它）
+  const order = [mainBranch, ...[...groups.keys()].filter(b => b !== mainBranch)]
+
+  for (const b of order) {
+    const ns = groups.get(b)!
     const sorted = [...ns].sort((a, c) => a.seq - c.seq)
-    const lns: LayoutNode[] = sorted.map(n => ({
+    const level = levelMap.get(b) ?? 0
+    const x = 100 + level * BRANCH_X_OFFSET
+
+    // 节点序列：fork 分支 = [锚点] + 分支自己的节点
+    // （主分支 = 自己的节点）
+    const seqNodes: BranchNode[] = []
+    const anchor = anchorMap.get(b)
+    if (anchor) seqNodes.push(anchor)
+    seqNodes.push(...sorted)
+
+    const lns: LayoutNode[] = seqNodes.map(n => ({
       id: n.id,
       important: n.kind === 'important',
       ghost: n.kind === 'ghost',
     }))
     const laid = computeLayout(lns, options)
-    const level = levelMap.get(b) ?? 0
-    const x = 100 + level * BRANCH_X_OFFSET
 
-    // fork 弧线起点：分支根节点的 parent 在父分支上的位置
-    let forkFrom: BranchLayoutItem['forkFrom']
-    const parentBranch = parentBranchMap.get(b)
-    if (parentBranch) {
-      const root = sorted.find(n => n.copiedFrom) || sorted[0]
-      const parentNode = nodes.find(n => n.id === root.parentId)
-      if (parentNode) {
-        const pb = branches.find(br => br.branch === parentBranch)
-        const parentItem = pb?.items.find(it => it.nodeId === parentNode.id)
-        if (pb && parentItem) {
-          forkFrom = { parentBranch, parentY: parentItem.y }
-        }
+    let items = laid.map((it, i) => ({
+      ...it,
+      status: seqNodes[i].status,
+      nodeId: seqNodes[i].id,
+      parentId: seqNodes[i].parentId,
+    }))
+
+    // 锚点 y = 父分支上锚点的 y（对齐分叉点）
+    // 布局从顶部开始，需要平移使锚点对齐父分支位置
+    if (anchor) {
+      const parentBranch = parentBranchMap.get(b)
+      const pb = branches.find(br => br.branch === parentBranch)
+      const anchorItem = pb?.items.find(it => it.nodeId === anchor.id)
+      if (pb && anchorItem) {
+        const shift = anchorItem.y - items[0].y
+        items = items.map(it => ({ ...it, y: it.y + shift }))
       }
     }
 
-    // 布局（从顶部开始）
-    let items = laid.map((it, i) => ({
-      ...it,
-      status: sorted[i].status,
-      nodeId: sorted[i].id,
-      parentId: sorted[i].parentId,
-    }))
-
-    // 倒 Y：fork 分支整体平移，使第一个节点（虚节点）对齐 fork 点的 y
-    if (forkFrom && items.length > 0) {
-      const shift = forkFrom.parentY - items[0].y
-      items = items.map(it => ({ ...it, y: it.y + shift }))
-    }
-
-    // 分支链线范围：fork 分支从第一个节点开始（不延伸到顶部）
-    const topY = items.length > 0 ? (level === 0 ? 8 : items[0].y) : 8
+    // 分支链线范围：从锚点开始到分支末尾
+    const topY = items.length > 0 ? items[0].y : 8
     const bottomY = items.length > 0 ? items[items.length - 1].y : 8
-    const branchItem: BranchLayoutItem = { branch: b, x, items, level, topY, bottomY, forkFrom }
-    branches.push(branchItem)
-    if (laid.length > 0) {
-      maxY = Math.max(maxY, laid[laid.length - 1].y + 20)
+
+    branches.push({
+      branch: b, x, items,
+      anchorNodeId: anchor ? anchor.id : (sorted[0]?.id ?? ''),
+      topY, bottomY,
+    })
+
+    if (items.length > 0) {
+      maxY = Math.max(maxY, items[items.length - 1].y + 20)
     }
     maxX = Math.max(maxX, x + 60)
   }

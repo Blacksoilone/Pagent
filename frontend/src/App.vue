@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
 import { DEFAULT_OPTIONS, type LayoutOptions } from './layout'
-import { computeBranchLayout, forkArc, type BranchLayoutItem } from './branchLayout'
+import { computeBranchLayout } from './branchLayout'
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -41,7 +41,6 @@ function saveSettings() {
 }
 const diamSmall = computed(() => layoutSettings.value.diamSmall)
 const diamBig = computed(() => layoutSettings.value.diamBig)
-const BRANCH_X_OFFSET = 80 // 分支水平偏移
 const gapMultiplier = computed({
   get: () => layoutSettings.value.gapImportant / layoutSettings.value.diamBig,
   set: (v: number) => {
@@ -150,13 +149,6 @@ const branchResult = computed(() => {
 })
 
 const braceletHeight = computed(() => branchResult.value.height)
-const forkedBranches = computed(() => branchResult.value.branches.filter(b => b.forkFrom))
-function arcD(b: BranchLayoutItem) {
-  if (!b.forkFrom) return ''
-  const startY = b.forkFrom.parentY
-  const endY = b.items[0]?.y ?? startY
-  return forkArc(b.x - BRANCH_X_OFFSET, startY, b.x, endY)
-}
 
 onMounted(refresh)
 </script>
@@ -237,12 +229,7 @@ onMounted(refresh)
         <div class="bracelet-wrap">
           <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
             :width="branchResult.width">
-            <!-- fork 弧线 -->
-            <path v-for="b in forkedBranches"
-              :key="'arc-' + b.branch"
-              :d="arcD(b)"
-              :stroke="layoutSettings.colorLine" :stroke-width="1.5" fill="none" opacity="0.4" stroke-dasharray="4,3" />
-            <!-- 每条分支 -->
+            <!-- 每条分支（倒 Y：两条链从 fork 点分叉向下） -->
             <g v-for="b in branchResult.branches" :key="'br-' + b.branch">
               <!-- 链线（串绳）：只画该分支自己的范围（倒 Y，fork 分支从 fork 点开始） -->
               <line :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"

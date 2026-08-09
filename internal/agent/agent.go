@@ -219,7 +219,36 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onS
 	if onDone != nil && eng.Node() != nil {
 		onDone(eng.Node().ID, eng.Node().Status)
 	}
+	// 对话完成后，确保链尾有虚节点（3.6：链末尾总有虚节点）
+	if err == nil && eng.Node() != nil && eng.Node().Status == model.NodeStatusDone {
+		if err2 := r.ensureTailGhost(chainID, branch, eng.Node()); err2 != nil {
+			return err2
+		}
+	}
 	return err
+}
+
+// ensureTailGhost 确保分支末尾有虚节点：对话节点后补一个。
+func (r *Runner) ensureTailGhost(chainID, branch string, lastNode *model.Node) error {
+	// 如果最后一个节点本身就是虚节点（对话未实体化），不补
+	if lastNode.Kind == model.NodeKindGhost {
+		return nil
+	}
+	// 查找该分支是否已有尾虚节点（parent = lastNode）
+	nodes, err := r.Store.ListChainNodes(chainID)
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		if n.Kind == model.NodeKindGhost && n.ParentID == lastNode.ID && n.Branch == branch {
+			return nil // 已有尾虚节点
+		}
+	}
+	// 补一个虚节点
+	ghost := model.NewNode(chainID, lastNode.ID, model.NodeKindGhost)
+	ghost.Branch = branch
+	ghost.Visible = true
+	return r.Store.InsertNodeStart(ghost)
 }
 
 // projectMounts 返回项目的挂载目录列表。
