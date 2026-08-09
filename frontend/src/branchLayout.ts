@@ -37,10 +37,19 @@ export interface BranchSegment {
 export interface ForkConn {
   from: { x: number; y: number }
   to: { x: number; y: number }
+  d: string
 }
 
-export const BRANCH_X_OFFSET = 80
+export const BRANCH_X_OFFSET = 50
+export const BRANCH_Y_DROP = 36
 export const MAIN_X = 100
+
+// 分叉弧线：三次贝塞尔，先垂直向下再弯向分支（左上 → 右下）。
+function forkPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
+  const dy = to.y - from.y
+  const k = Math.max(20, dy * 0.6)
+  return `M ${from.x},${from.y} C ${from.x},${from.y + k} ${to.x},${to.y - k} ${to.x},${to.y}`
+}
 
 export function computeBranchLayout(
   nodes: BranchNode[],
@@ -125,9 +134,9 @@ export function computeBranchLayout(
       nodeId: mainTailNodes[i].id,
       parentId: mainTailNodes[i].parentId,
     }))
-    // 平移：使第一个节点从锚点 y 开始
+    // 平移：使第一个节点从锚点 y 下方 BRANCH_Y_DROP 开始（弧线从左上到右下）
     if (items.length > 0) {
-      const shift = anchorY - items[0].y
+      const shift = anchorY + BRANCH_Y_DROP - items[0].y
       items = items.map(it => ({ ...it, y: it.y + shift }))
     }
     const x = MAIN_X + BRANCH_X_OFFSET
@@ -138,7 +147,8 @@ export function computeBranchLayout(
       bottomY: items.length > 0 ? items[items.length - 1].y : anchorY,
     })
     if (anchor) {
-      forks.push({ from: { x: MAIN_X, y: anchorY }, to: { x, y: items[0]?.y ?? anchorY } })
+      const to = { x, y: items[0]?.y ?? anchorY + BRANCH_Y_DROP }
+      forks.push({ from: { x: MAIN_X, y: anchorY }, to, d: forkPath({ x: MAIN_X, y: anchorY }, to) })
     }
     if (items.length > 0) maxY = Math.max(maxY, items[items.length - 1].y)
   }
@@ -156,7 +166,7 @@ export function computeBranchLayout(
       parentId: forkNodes[i].parentId,
     }))
     if (items.length > 0) {
-      const shift = anchorY - items[0].y
+      const shift = anchorY + BRANCH_Y_DROP - items[0].y
       items = items.map(it => ({ ...it, y: it.y + shift }))
     }
     const x = MAIN_X - BRANCH_X_OFFSET
@@ -166,7 +176,8 @@ export function computeBranchLayout(
       topY: items.length > 0 ? items[0].y : anchorY,
       bottomY: items.length > 0 ? items[items.length - 1].y : anchorY,
     })
-    forks.push({ from: { x: MAIN_X, y: anchorY }, to: { x, y: items[0]?.y ?? anchorY } })
+    const to = { x, y: items[0]?.y ?? anchorY + BRANCH_Y_DROP }
+    forks.push({ from: { x: MAIN_X, y: anchorY }, to, d: forkPath({ x: MAIN_X, y: anchorY }, to) })
     if (items.length > 0) maxY = Math.max(maxY, items[items.length - 1].y)
   }
 

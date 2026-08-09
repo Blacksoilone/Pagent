@@ -230,11 +230,11 @@ onMounted(refresh)
         <div class="bracelet-wrap">
           <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
             :width="branchResult.width">
-            <!-- 分叉连接线：锚点 → 各分支第一个节点（倒 Y） -->
-            <line v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
-              :x1="f.from.x" :y1="f.from.y" :x2="f.to.x" :y2="f.to.y"
+            <!-- 分叉弧线：锚点 → 各分支第一个节点（倒 Y，左上 → 右下） -->
+            <path v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
+              :d="f.d"
               :stroke="layoutSettings.colorLine" :stroke-width="1.5"
-              stroke-linecap="round" opacity="0.5" stroke-dasharray="4,3" />
+              fill="none" stroke-linecap="round" opacity="0.5" stroke-dasharray="4,3" />
             <!-- 每条分支 -->
             <g v-for="(b, i) in branchResult.segments" :key="'seg-' + i">
               <!-- 链线（串绳）：只画该分支自己的范围 -->
