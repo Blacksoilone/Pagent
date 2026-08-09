@@ -234,7 +234,7 @@ onMounted(refresh)
             <path v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
               :d="f.d"
               :stroke="layoutSettings.colorLine" :stroke-width="1.5"
-              fill="none" stroke-linecap="round" opacity="0.5" stroke-dasharray="4,3" />
+              fill="none" stroke-linecap="round" opacity="0.7" />
             <!-- 每条分支 -->
             <g v-for="(b, i) in branchResult.segments" :key="'seg-' + i">
               <!-- 链线（串绳）：只画该分支自己的范围 -->
