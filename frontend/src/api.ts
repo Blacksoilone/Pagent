@@ -14,7 +14,10 @@ export interface PartDTO {
 
 export interface NodeDTO {
   id: string
+  seq: number
   parent_id?: string
+  branch: string
+  copied_from?: string
   kind: string
   status: string
   title?: string

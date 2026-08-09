@@ -119,16 +119,17 @@ func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
 
 // NodeDTO 节点的 API 表示（含 parts）。
 type NodeDTO struct {
-	ID       string    `json:"id"`
-	Seq      int       `json:"seq"`
-	ParentID string    `json:"parent_id,omitempty"`
-	Branch   string    `json:"branch"`
-	Kind     string    `json:"kind"`
-	Status   string    `json:"status"`
-	Title    string    `json:"title,omitempty"`
-	Summary  string    `json:"summary,omitempty"`
-	Visible  bool      `json:"visible"`
-	Parts    []PartDTO `json:"parts"`
+	ID         string    `json:"id"`
+	Seq        int       `json:"seq"`
+	ParentID   string    `json:"parent_id,omitempty"`
+	Branch     string    `json:"branch"`
+	CopiedFrom string    `json:"copied_from,omitempty"`
+	Kind       string    `json:"kind"`
+	Status     string    `json:"status"`
+	Title      string    `json:"title,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	Visible    bool      `json:"visible"`
+	Parts      []PartDTO `json:"parts"`
 }
 
 // PartDTO part 的 API 表示。
@@ -152,9 +153,9 @@ func (s *Server) handleChainNodes(w http.ResponseWriter, r *http.Request) {
 			parts = append(parts, PartDTO{Seq: p.Seq, Role: string(p.Role), Content: p.Content})
 		}
 		out = append(out, NodeDTO{
-			ID: n.ID, Seq: n.Seq, ParentID: n.ParentID, Branch: n.Branch, Kind: string(n.Kind),
-			Status: string(n.Status), Title: n.Title, Summary: n.Summary, Visible: n.Visible,
-			Parts: parts,
+			ID: n.ID, Seq: n.Seq, ParentID: n.ParentID, Branch: n.Branch, CopiedFrom: n.CopiedFrom,
+			Kind: string(n.Kind), Status: string(n.Status), Title: n.Title, Summary: n.Summary,
+			Visible: n.Visible, Parts: parts,
 		})
 	}
 	writeJSON(w, 200, out)

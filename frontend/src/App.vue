@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
-import { computeLayout, DEFAULT_OPTIONS, type LayoutNode, type LayoutOptions } from './layout'
+import { DEFAULT_OPTIONS, type LayoutOptions } from './layout'
+import { computeBranchLayout, forkArc, type BranchLayoutItem } from './branchLayout'
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -40,6 +41,7 @@ function saveSettings() {
 }
 const diamSmall = computed(() => layoutSettings.value.diamSmall)
 const diamBig = computed(() => layoutSettings.value.diamBig)
+const BRANCH_X_OFFSET = 80 // 分支水平偏移
 const gapMultiplier = computed({
   get: () => layoutSettings.value.gapImportant / layoutSettings.value.diamBig,
   set: (v: number) => {
@@ -133,29 +135,28 @@ function scrollToBottom() {
   })
 }
 
-interface LayoutResultWithStatus {
-  node: LayoutNode
-  y: number
-  big: boolean
-  status: string
-}
-
-const braceletItems = computed<LayoutResultWithStatus[]>(() => {
-  const lns: LayoutNode[] = nodes.value.map(n => ({
+const branchResult = computed(() => {
+  const bns = nodes.value.map(n => ({
     id: n.id,
-    important: n.kind === 'important',
-    ghost: n.kind === 'ghost',
+    seq: n.seq,
+    parentId: n.parent_id || '',
+    branch: n.branch || '',
+    kind: n.kind,
+    status: n.status,
+    copiedFrom: n.copied_from || '',
+    parts: n.parts,
   }))
-  const laid = computeLayout(lns, layoutSettings.value)
-  const statusById = new Map(nodes.value.map(n => [n.id, n.status]))
-  return laid.map(it => ({ ...it, status: statusById.get(it.node.id) || 'done' } as LayoutResultWithStatus))
+  return computeBranchLayout(bns, layoutSettings.value)
 })
 
-const braceletHeight = computed(() => {
-  if (braceletItems.value.length === 0) return 80
-  const last = braceletItems.value[braceletItems.value.length - 1]
-  return last.y + 20
-})
+const braceletHeight = computed(() => branchResult.value.height)
+const forkedBranches = computed(() => branchResult.value.branches.filter(b => b.forkFrom))
+function arcD(b: BranchLayoutItem) {
+  if (!b.forkFrom) return ''
+  const startY = b.forkFrom.parentY
+  const endY = b.items[0]?.y ?? startY
+  return forkArc(b.x - BRANCH_X_OFFSET, startY, b.x, endY)
+}
 
 onMounted(refresh)
 </script>
@@ -234,21 +235,30 @@ onMounted(refresh)
           <span class="node-count">{{ nodes.length }} 个节点</span>
         </div>
         <div class="bracelet-wrap">
-          <svg class="chain-svg" :viewBox="'0 0 200 ' + (braceletHeight + 40)" width="200">
-            <!-- 链线（串绳） -->
-            <line x1="100" :y1="8" x2="100" :y2="braceletHeight - 8"
-              :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
-              stroke-linecap="round" opacity="0.6" />
-            <!-- 珠子 -->
-            <g v-for="it in braceletItems" :key="it.node.id" :transform="'translate(100,' + it.y + ')'">
-              <circle
-                :r="it.big ? diamBig / 2 : diamSmall / 2"
-                :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"
-                :stroke="it.node.ghost ? layoutSettings.colorSmall : (it.big ? layoutSettings.colorBig : 'none')"
-                :stroke-width="it.node.ghost ? 2 : 0"
-                :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
-                :opacity="it.status === 'partial' ? 0.5 : 1"
-              />
+          <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
+            :width="branchResult.width">
+            <!-- fork 弧线 -->
+            <path v-for="b in forkedBranches"
+              :key="'arc-' + b.branch"
+              :d="arcD(b)"
+              :stroke="layoutSettings.colorLine" :stroke-width="1.5" fill="none" opacity="0.4" stroke-dasharray="4,3" />
+            <!-- 每条分支 -->
+            <g v-for="b in branchResult.branches" :key="'br-' + b.branch">
+              <!-- 链线（串绳） -->
+              <line :x1="b.x" :y1="8" :x2="b.x" :y2="braceletHeight - 8"
+                :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
+                stroke-linecap="round" opacity="0.6" />
+              <!-- 珠子 -->
+              <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
+                <circle
+                  :r="it.big ? diamBig / 2 : diamSmall / 2"
+                  :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"
+                  :stroke="it.node.ghost ? layoutSettings.colorSmall : (it.big ? layoutSettings.colorBig : 'none')"
+                  :stroke-width="it.node.ghost ? 2 : 0"
+                  :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
+                  :opacity="it.status === 'partial' ? 0.5 : 1"
+                />
+              </g>
             </g>
           </svg>
         </div>
