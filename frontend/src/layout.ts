@@ -96,10 +96,12 @@ export function computeLayout(nodes: LayoutNode[], options?: Partial<LayoutOptio
     const startY = result[a].y
 
     // 基础段 = A→n1 相切 + 中间相切 + nk→B 相切；k=0 时两个大节点相切 2R_BIG
+    // k=0（两个大点直接相邻）：间距 = 相切+间隙（gapBB），不适用 6D 下限
+    // k>=1（中间有小点）：段长 = max(6D, 基础段)，6D 下限生效
     const baseTotal = k === 0
       ? gapBB
       : gapSB + (k - 1) * gapSS + gapSB
-    const segLen = Math.max(gapImp, baseTotal)
+    const segLen = k === 0 ? gapBB : Math.max(gapImp, baseTotal)
     const extra = segLen - baseTotal
 
     // 各段长度：首尾相切段 + 中间小点段，富余均匀分配到所有段

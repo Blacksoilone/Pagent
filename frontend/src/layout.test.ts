@@ -66,7 +66,7 @@ describe('computeLayout 手串布局', () => {
     expect(gap).toBeCloseTo(28 + 19 * 24 + 28, 3)
   })
 
-  it('虚节点按普通节点处理', () => {
+  it('虚节点按大节点处理（中间有小点时 6D 生效）', () => {
     const nodes = [
       node('a', { important: true }),
       node('g', { ghost: true }),
@@ -74,7 +74,10 @@ describe('computeLayout 手串布局', () => {
     ]
     const r = computeLayout(nodes)
     expect(r[1].node.ghost).toBe(true)
-    expect(r[2].y - r[0].y).toBeGreaterThanOrEqual(GAP_IMPORTANT)
+    // a→g 相邻（k=0）：间距 = gapBB = 32（不用 6D）
+    expect(r[1].y - r[0].y).toBeCloseTo(32, 5)
+    // g→c 相邻（k=0）：间距 = gapBB = 32
+    expect(r[2].y - r[1].y).toBeCloseTo(32, 5)
   })
 })
 
@@ -103,9 +106,9 @@ describe('相切约束', () => {
     expect(r[0].big).toBe(true)
     expect(r[1].big).toBe(true)
     expect(r[2].big).toBe(true)
-    // 两个区间：s1→big（k=0）和 big→s2（k=0）都是 6D
-    expect(r[1].y - r[0].y).toBeCloseTo(GAP_IMPORTANT, 5)
-    expect(r[2].y - r[1].y).toBeCloseTo(GAP_IMPORTANT, 5)
+    // 两个区间都是 k=0（大点直接相邻）：间距 = gapBB = 32
+    expect(r[1].y - r[0].y).toBeCloseTo(32, 5)
+    expect(r[2].y - r[1].y).toBeCloseTo(32, 5)
   })
 
   it('重要节点之间的段长包含首尾相切（含大点半径）', () => {
@@ -154,13 +157,13 @@ describe('虚节点按重要节点规则', () => {
     expect(gap).toBeGreaterThanOrEqual(GAP_IMPORTANT)
   })
 
-  it('链首虚节点与重要节点之间按 6D', () => {
+  it('链首虚节点与重要节点相邻（k=0）：间距 = gapBB = 32', () => {
     const nodes = [
       node('g', { ghost: true }),
       node('a', { important: true }),
     ]
     const r = computeLayout(nodes)
-    expect(r[1].y - r[0].y).toBeGreaterThanOrEqual(GAP_IMPORTANT)
+    expect(r[1].y - r[0].y).toBeCloseTo(32, 5)
   })
 
   it('虚节点-普通节点相邻：6D 主导时均匀分配，不重叠', () => {
