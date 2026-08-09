@@ -269,3 +269,139 @@ func TestStateline_Should_ConsumeAndPersist(t *testing.T) {
 		t.Error("consumed stateline should not be pending")
 	}
 }
+
+// ═══════════════ 虚节点规则 ═══════════════
+
+func TestGhostNode_Should_RejectAsParent(t *testing.T) {
+	db := openTestDB(t)
+
+	p := model.NewProject("proj", nil)
+	if err := db.CreateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	ch := model.NewChain(p.ID, "工作链")
+	if err := db.CreateChain(ch); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+
+	anchor := ch.AddNode(model.NodeKindNormal)
+	anchor.AppendPart(model.NodePartRoleUser, "对话", 3)
+	if err := db.InsertNode(anchor); err != nil {
+		t.Fatalf("insert anchor: %v", err)
+	}
+
+	ghost := ch.AddNode(model.NodeKindGhost)
+	if err := db.InsertNode(ghost); err != nil {
+		t.Fatalf("insert ghost: %v", err)
+	}
+
+	// 虚节点作父 → 必须拒绝
+	child := model.NewNode(ch.ID, ghost.ID, model.NodeKindNormal)
+	child.Branch = ghost.ID
+	err := db.InsertNodeStart(child)
+	if err == nil {
+		t.Fatal("expected error when ghost is parent, got nil")
+	}
+
+	// 虚节点本身仍可插入（fork/尾虚场景）
+	nodes, err := db.ListChainNodes(ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes len = %d, want 2 (ghost 插入不受影响)", len(nodes))
+	}
+}
+
+func TestDeleteNode_Should_RemovePartsAndNode(t *testing.T) {
+	db := openTestDB(t)
+
+	p := model.NewProject("proj", nil)
+	if err := db.CreateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	ch := model.NewChain(p.ID, "工作链")
+	if err := db.CreateChain(ch); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+
+	n := ch.AddNode(model.NodeKindNormal)
+	n.AppendPart(model.NodePartRoleUser, "内容", 3)
+	if err := db.InsertNode(n); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	if err := db.DeleteNode(n.ID); err != nil {
+		t.Fatalf("delete node: %v", err)
+	}
+	if _, err := db.GetNode(n.ID); err == nil {
+		t.Fatal("node should be gone after delete")
+	}
+	nodes, err := db.ListChainNodes(ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("nodes len = %d, want 0", len(nodes))
+	}
+}
+
+func TestFixGhostWithChildren_Should_Materialize(t *testing.T) {
+	db := openTestDB(t)
+
+	p := model.NewProject("proj", nil)
+	if err := db.CreateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	ch := model.NewChain(p.ID, "工作链")
+	if err := db.CreateChain(ch); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+
+	anchor := ch.AddNode(model.NodeKindNormal)
+	anchor.AppendPart(model.NodePartRoleUser, "对话", 3)
+	if err := db.InsertNode(anchor); err != nil {
+		t.Fatalf("insert anchor: %v", err)
+	}
+
+	// 制造脏数据：虚节点带子节点（绕过 InsertNodeStart 校验，直接 InsertNode）
+	ghost := ch.AddNode(model.NodeKindGhost)
+	ghost.Visible = true
+	if err := db.InsertNode(ghost); err != nil {
+		t.Fatalf("insert ghost: %v", err)
+	}
+	bad := model.NewNode(ch.ID, ghost.ID, model.NodeKindNormal)
+	if err := db.InsertNode(bad); err != nil {
+		t.Fatalf("insert child under ghost: %v", err)
+	}
+
+	// 尾虚节点（无子节点）不应被修复
+	tail := model.NewNode(ch.ID, bad.ID, model.NodeKindGhost)
+	tail.Visible = true
+	if err := db.InsertNode(tail); err != nil {
+		t.Fatalf("insert tail ghost: %v", err)
+	}
+
+	n, err := db.FixGhostWithChildren()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("fixed = %d, want 1 (只有带子节点的虚节点被实体化)", n)
+	}
+
+	got, err := db.GetNode(ghost.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != model.NodeKindNormal {
+		t.Errorf("ghost with children kind = %s, want normal", got.Kind)
+	}
+	tailGot, err := db.GetNode(tail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tailGot.Kind != model.NodeKindGhost {
+		t.Errorf("tail ghost kind = %s, want ghost (无子节点虚节点不受影响)", tailGot.Kind)
+	}
+}

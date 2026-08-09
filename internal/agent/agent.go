@@ -201,21 +201,39 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onS
 	}
 	// 父节点 = 指定分支的最后一个节点（若指定分支）；否则链尾
 	parentID := ""
+	ghostToRemove := ""
+	ghostCopiedFrom := ""
 	if branch != "" {
 		if last, err := r.Store.GetBranchTail(chainID, branch); err == nil {
-			parentID = last
+			// 虚节点不能有子节点：若分支尾是虚节点，对话节点取代它
+			if lastNode, err2 := r.Store.GetNode(last); err2 == nil && lastNode.Kind == model.NodeKindGhost {
+				parentID = lastNode.ParentID
+				ghostToRemove = last
+				ghostCopiedFrom = lastNode.CopiedFrom
+			} else {
+				parentID = last
+			}
 		}
 	}
 	if parentID == "" && len(history) > 0 {
 		parentID = history[len(history)-1].NodeID
 	}
 	_, err = eng.Run(ctx, runtime.RunInput{
-		Prebuilt:  assembled,
-		UserInput: userInput,
-		ChainID:   chainID,
-		ParentID:  parentID,
-		Branch:    branch,
+		Prebuilt:   assembled,
+		UserInput:  userInput,
+		ChainID:    chainID,
+		ParentID:   parentID,
+		Branch:     branch,
+		CopiedFrom: ghostCopiedFrom,
 	})
+	// 对话节点取代虚节点：删除被取代的虚节点（仅当对话节点已落盘且虚节点仍存在）
+	if ghostToRemove != "" && eng.Node() != nil {
+		if _, gerr := r.Store.GetNode(ghostToRemove); gerr == nil {
+			if derr := r.Store.DeleteNode(ghostToRemove); derr != nil {
+				return derr
+			}
+		}
+	}
 	if onDone != nil && eng.Node() != nil {
 		onDone(eng.Node().ID, eng.Node().Status)
 	}

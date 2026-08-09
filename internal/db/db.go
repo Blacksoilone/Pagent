@@ -712,6 +712,13 @@ func (d *DB) ListChains() ([]*model.Chain, error) {
 
 // InsertNodeStart 创建 pending 状态的节点（10.4 WAL：节点先落盘，part 增量追加）。
 func (d *DB) InsertNodeStart(n *model.Node) error {
+	// 规则校验：虚节点不能有子节点（虚节点 = 尚未发生的下一次 turn 的占位）。
+	// 任何想把节点挂到虚节点下的操作都必须先实体化/取代该虚节点。
+	if n.ParentID != "" {
+		if p, err := d.GetNode(n.ParentID); err == nil && p.Kind == model.NodeKindGhost {
+			return fmt.Errorf("ghost node %s cannot have children (虚节点不能有子节点)", n.ParentID)
+		}
+	}
 	vis := 0
 	if n.Visible {
 		vis = 1
@@ -756,4 +763,32 @@ func (d *DB) AppendPart(p model.NodePart) error {
 func (d *DB) UpdateNodeStatus(nodeID string, status model.NodeStatus) error {
 	_, err := d.raw.Exec(`UPDATE node SET status = ? WHERE id = ?`, status, nodeID)
 	return err
+}
+
+// DeleteNode 删除节点及其 parts（级联）。仅用于虚节点被对话取代后的清理。
+func (d *DB) DeleteNode(nodeID string) error {
+	tx, err := d.raw.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM node_part WHERE node_id = ?`, nodeID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM node WHERE id = ?`, nodeID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// FixGhostWithChildren 修复存量脏数据：把有子节点的虚节点实体化为 normal。
+// 返回修复数量。新写入路径由 InsertNodeStart 校验拦截，此函数用于历史数据。
+func (d *DB) FixGhostWithChildren() (int, error) {
+	res, err := d.raw.Exec(`UPDATE node SET kind = 'normal' WHERE kind = 'ghost' AND id IN (
+		SELECT parent_id FROM node WHERE parent_id IS NOT NULL)`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
