@@ -1,11 +1,12 @@
-// 分支布局：倒 Y 分叉，全部纵向，支持同一锚点多次分叉（多 fork 分支）。
+// 分支布局：倒 Y 分叉，全部纵向，支持主链多个分叉点。
 //
 // 结构：
-//   共同祖先段（A1→A2→A3）画在中间列 x=MAIN_X
-//   分叉点 P 的子方向 = fork 分支们 + 主链继续段，按对称规则分配列：
-//     子方向数 N 为奇数（如 3）：主链继续段竖直对齐（x=MAIN_X），fork 分支对称分布两侧
-//     子方向数 N 为偶数（如 2）：全部偏移，fork 在左，主链继续段在最右
-//   P 用三次贝塞尔弧线连到每个子方向的第一个节点（左上 → 右下）
+//   主链从 x=MAIN_X 开始；每个分叉点把主链分成"祖先段 + 继续段"
+//   分叉点的子方向 = fork 分支们 + 主链继续段，按奇偶规则分配列：
+//     子方向数 N 为奇数（如 3）：主链继续段竖直对齐（保持分叉点所在列）
+//     子方向数 N 为偶数（如 2）：主链继续段在最右一列，fork 分支在左
+//   fork 分支列从分叉点列向外扩展，跳过已被占用的列
+//   分叉点用三次贝塞尔弧线连到每个 fork 分支第一个节点（左上 → 右下）
 //   所有链纵向（从上到下），虚节点在底部
 
 import { computeLayout, type LayoutNode, type LayoutResult, type LayoutOptions } from './layout'
@@ -49,22 +50,6 @@ function forkPath(from: { x: number; y: number }, to: { x: number; y: number }):
   const dy = to.y - from.y
   const k = Math.max(20, dy * 0.6)
   return `M ${from.x},${from.y} C ${from.x},${from.y + k} ${to.x},${to.y - k} ${to.x},${to.y}`
-}
-
-// 对称分配子方向列位置（相对 MAIN_X 的偏移倍数）。
-// 奇数 N：中间 = 主链继续段（竖直对齐）；偶数 N：最右 = 主链继续段。
-// 返回 positions[i] = 第 i 个子方向的偏移倍数（i = 子方向序号，最后一个为主链继续段）。
-function assignPositions(n: number): number[] {
-  const pos: number[] = []
-  if (n % 2 === 1) {
-    for (let i = 0; i < n; i++) pos.push(i - (n - 1) / 2)
-    const center = (n - 1) / 2
-    const last = n - 1
-    ;[pos[center], pos[last]] = [pos[last], pos[center]]
-  } else {
-    for (let i = 0; i < n; i++) pos.push(i < n / 2 ? i - n / 2 : i - n / 2 + 1)
-  }
-  return pos
 }
 
 export function computeBranchLayout(
@@ -114,29 +99,31 @@ export function computeBranchLayout(
     }
   }
 
-  // 3. 找分叉点：fork 分支根（copiedFrom 非空）的 parent 在主链上的节点
+  // 3. 收集分叉点：fork 分支根（copiedFrom 非空）的 parent 在主链上的节点
   //    同一锚点多次 fork → 多个 fork 分支共享同一分叉点
-  let anchor: BranchNode | undefined
-  const forkGroups: BranchNode[][] = []
+  const forkMap = new Map<string, BranchNode[][]>() // anchorId → fork 分支列表
   for (const b of forkBranches) {
     const ns = [...(groups.get(b)!)].sort((a, c) => a.seq - c.seq)
     const root = ns.find(n => n.copiedFrom) || ns[0]
     const a = mainNodes.find(n => n.id === root.parentId)
     if (!a) continue
-    if (!anchor) anchor = a
-    forkGroups.push(ns)
+    if (!forkMap.has(a.id)) forkMap.set(a.id, [])
+    forkMap.get(a.id)!.push(ns)
   }
-  if (!anchor || forkGroups.length === 0) {
+  const forkPoints = [...forkMap.entries()]
+    .map(([anchorId, forks]) => ({
+      anchor: mainNodes.find(n => n.id === anchorId)!,
+      forks,
+    }))
+    .filter(p => p.anchor)
+    .sort((a, c) => a.anchor.seq - c.anchor.seq)
+
+  if (forkPoints.length === 0) {
     // 无法确定分叉点（异常数据）：退化为主链单列
     return computeBranchLayout(mainNodes, options)
   }
 
-  // 4. 分割主链：锚点之前（含锚点）= 祖先段；锚点之后 = 主链继续段
-  const anchorIdx = mainNodes.findIndex(n => n.id === anchor!.id)
-  const ancestorNodes = anchorIdx >= 0 ? mainNodes.slice(0, anchorIdx + 1) : mainNodes
-  const mainTailNodes = anchorIdx >= 0 ? mainNodes.slice(anchorIdx + 1) : []
-
-  // 5. 布局祖先段（中间列）
+  // 4. 布局
   const layoutSeq = (ns: BranchNode[]) => {
     const lns: LayoutNode[] = ns.map(n => ({
       id: n.id, important: n.kind === 'important', ghost: n.kind === 'ghost',
@@ -144,67 +131,116 @@ export function computeBranchLayout(
     return computeLayout(lns, options)
   }
 
-  const ancestorLaid = layoutSeq(ancestorNodes)
-  const ancestorItems: LayoutItem[] = ancestorLaid.map((it, i) => ({
-    ...it,
-    status: ancestorNodes[i].status,
-    nodeId: ancestorNodes[i].id,
-    parentId: ancestorNodes[i].parentId,
-  }))
-  const anchorY = ancestorItems.find(it => it.nodeId === anchor!.id)?.y ?? 8
-
-  const segments: BranchSegment[] = [{
-    x: MAIN_X,
-    items: ancestorItems,
-    topY: ancestorItems.length > 0 ? ancestorItems[0].y : 8,
-    bottomY: ancestorItems.length > 0 ? ancestorItems[ancestorItems.length - 1].y : 8,
-  }]
+  const segments: BranchSegment[] = []
   const forks: ForkConn[] = []
-  let maxY = Math.max(300, anchorY + 20)
-  if (ancestorItems.length > 0) maxY = Math.max(maxY, ancestorItems[ancestorItems.length - 1].y)
+  const usedCols = new Set<number>([MAIN_X])
+  let maxY = 300
 
-  // 6. 子方向：fork 分支们（按根 seq 排序）+ 主链继续段（最后）
-  forkGroups.sort((a, c) => a[0].seq - c[0].seq)
-  const dirs: { nodes: BranchNode[]; isTail: boolean }[] = [
-    ...forkGroups.map(ns => ({ nodes: ns, isTail: false })),
-  ]
-  if (mainTailNodes.length > 0) dirs.push({ nodes: mainTailNodes, isTail: true })
-
-  if (dirs.length === 0) {
-    return { segments, forks, width: MAIN_X * 2 + 80, height: maxY }
+  const layoutMainSegment = (start: number, end: number, col: number, baseY?: number): Map<string, number> => {
+    const ns = mainNodes.slice(start, end)
+    const laid = layoutSeq(ns)
+    let items: LayoutItem[] = laid.map((it, i) => ({
+      ...it,
+      status: ns[i].status,
+      nodeId: ns[i].id,
+      parentId: ns[i].parentId,
+    }))
+    if (baseY !== undefined && items.length > 0) {
+      const shift = baseY - items[0].y
+      items = items.map(it => ({ ...it, y: it.y + shift }))
+    }
+    if (items.length > 0) {
+      segments.push({
+        x: col,
+        items,
+        topY: items[0].y,
+        bottomY: items[items.length - 1].y,
+      })
+      maxY = Math.max(maxY, items[items.length - 1].y)
+    }
+    return new Map(items.map(it => [it.nodeId, it.y]))
   }
 
-  const positions = assignPositions(dirs.length)
-  dirs.forEach((dir, i) => {
-    const x = MAIN_X + positions[i] * BRANCH_X_OFFSET
-    const laid = layoutSeq(dir.nodes)
-    let items: LayoutItem[] = laid.map((it, j) => ({
+  const layoutForkBranch = (ns: BranchNode[], anchorCol: number, anchorY: number, col: number) => {
+    const laid = layoutSeq(ns)
+    let items: LayoutItem[] = laid.map((it, i) => ({
       ...it,
-      status: dir.nodes[j].status,
-      nodeId: dir.nodes[j].id,
-      parentId: dir.nodes[j].parentId,
+      status: ns[i].status,
+      nodeId: ns[i].id,
+      parentId: ns[i].parentId,
     }))
     if (items.length > 0) {
       const shift = anchorY + BRANCH_Y_DROP - items[0].y
       items = items.map(it => ({ ...it, y: it.y + shift }))
+      segments.push({
+        x: col,
+        items,
+        topY: items[0].y,
+        bottomY: items[items.length - 1].y,
+      })
+      maxY = Math.max(maxY, items[items.length - 1].y)
     }
-    segments.push({
-      x,
-      items,
-      topY: items.length > 0 ? items[0].y : anchorY + BRANCH_Y_DROP,
-      bottomY: items.length > 0 ? items[items.length - 1].y : anchorY + BRANCH_Y_DROP,
-    })
-    const to = { x, y: items[0]?.y ?? anchorY + BRANCH_Y_DROP }
-    if (!dir.isTail || x !== MAIN_X) {
-      forks.push({ from: { x: MAIN_X, y: anchorY }, to, d: forkPath({ x: MAIN_X, y: anchorY }, to) })
-    }
-    if (items.length > 0) maxY = Math.max(maxY, items[items.length - 1].y)
-  })
-
-  return {
-    segments,
-    forks,
-    width: MAIN_X + Math.max(...positions.map(p => Math.abs(p))) * BRANCH_X_OFFSET + 100,
-    height: maxY + 20,
+    const to = { x: col, y: items[0]?.y ?? anchorY + BRANCH_Y_DROP }
+    forks.push({ from: { x: anchorCol, y: anchorY }, to, d: forkPath({ x: anchorCol, y: anchorY }, to) })
   }
+
+  const allocCol = (base: number, side: number): number => {
+    let step = 1
+    while (usedCols.has(base + side * step * BRANCH_X_OFFSET)) step++
+    const col = base + side * step * BRANCH_X_OFFSET
+    usedCols.add(col)
+    return col
+  }
+
+  const walk = (startIdx: number, fpIdx: number, col: number, baseY?: number) => {
+    if (fpIdx >= forkPoints.length) {
+      layoutMainSegment(startIdx, mainNodes.length, col, baseY)
+      return
+    }
+    const p = forkPoints[fpIdx]
+    const anchorIdx = mainNodes.findIndex(n => n.id === p.anchor.id)
+    if (anchorIdx < startIdx) {
+      layoutMainSegment(startIdx, mainNodes.length, col, baseY)
+      return
+    }
+
+    const yOf = layoutMainSegment(startIdx, anchorIdx + 1, col, baseY)
+    const anchorY = yOf.get(p.anchor.id) ?? 8
+    maxY = Math.max(maxY, anchorY)
+
+    const forkList = [...p.forks].sort((a, c) => a[0].seq - c[0].seq)
+    const hasTail = anchorIdx + 1 < mainNodes.length
+    const N = forkList.length + (hasTail ? 1 : 0)
+
+    if (N === 0) return
+
+    let tailCol = col
+    if (N % 2 === 0) {
+      tailCol = allocCol(col, 1)
+    }
+
+    const forkCols: number[] = []
+    let side = -1
+    for (let i = 0; i < forkList.length; i++) {
+      if (N % 2 === 0) {
+        forkCols.push(allocCol(col, -1))
+      } else {
+        forkCols.push(allocCol(col, side))
+        side = -side
+      }
+    }
+
+    forkList.forEach((ns, i) => layoutForkBranch(ns, col, anchorY, forkCols[i]))
+
+    walk(anchorIdx + 1, fpIdx + 1, tailCol, anchorY + BRANCH_Y_DROP)
+  }
+
+  walk(0, 0, MAIN_X)
+
+  const cols = [...usedCols]
+  const minCol = Math.min(...cols)
+  const maxCol = Math.max(...cols)
+  const width = maxCol - minCol + 140
+
+  return { segments, forks, width, height: maxY + 20 }
 }
