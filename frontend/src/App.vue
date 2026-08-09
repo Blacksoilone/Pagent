@@ -3,6 +3,7 @@ import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
 import { DEFAULT_OPTIONS, type LayoutOptions } from './layout'
 import { computeBranchLayout } from './branchLayout'
+import { nodeLabel } from './label'
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -145,7 +146,9 @@ const branchResult = computed(() => {
     copiedFrom: n.copied_from || '',
     parts: n.parts,
   }))
-  return computeBranchLayout(bns, layoutSettings.value)
+  const chainName = chains.value.find(c => c.id === selectedChain.value)?.name || selectedChain.value
+  return computeBranchLayout(bns, layoutSettings.value,
+    (nodeId, depth) => nodeLabel(nodeId, depth, chainName))
 })
 
 const braceletHeight = computed(() => branchResult.value.height)
@@ -237,6 +240,8 @@ onMounted(refresh)
                 stroke-linecap="round" opacity="0.6" />
               <!-- 珠子 -->
               <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
+                <text :y="-(it.big ? diamBig / 2 : diamSmall / 2) - 4" text-anchor="middle"
+                  font-size="7" fill="#aaa" class="node-label">{{ it.label }}</text>
                 <circle
                   :r="it.big ? diamBig / 2 : diamSmall / 2"
                   :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"

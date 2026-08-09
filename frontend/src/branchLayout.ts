@@ -23,7 +23,7 @@ export interface BranchNode {
 export interface BranchLayoutItem {
   branch: string
   x: number          // 分支的 x 位置
-  items: (LayoutResult & { status: string; nodeId: string; parentId: string })[]
+  items: (LayoutResult & { status: string; nodeId: string; parentId: string; label: string })[]
   anchorNodeId: string // 分支的起点节点（fork 分支 = 父分支上的锚点）
   topY: number       // 链线起点（锚点的 y）
   bottomY: number    // 链线终点（该分支最后节点）
@@ -41,6 +41,7 @@ export function forkArc(x1: number, y1: number, x2: number, y2: number): string 
 export function computeBranchLayout(
   nodes: BranchNode[],
   options?: LayoutOptions,
+  labelFor?: (nodeId: string, depth: number) => string,
 ): { branches: BranchLayoutItem[]; width: number; height: number } {
   if (nodes.length === 0) return { branches: [], width: 200, height: 200 }
 
@@ -110,11 +111,26 @@ export function computeBranchLayout(
     }))
     const laid = computeLayout(lns, options)
 
+    // 计算深度（从链头到各节点）
+    const depthOf = new Map<string, number>()
+    const parentOf = new Map<string, string>()
+    for (const n of seqNodes) if (n.parentId) parentOf.set(n.id, n.parentId)
+    const visit = (id: string): number => {
+      const c2 = depthOf.get(id)
+      if (c2 !== undefined) return c2
+      const p = parentOf.get(id)
+      const d = p ? visit(p) + 1 : 1
+      depthOf.set(id, d)
+      return d
+    }
+    for (const n of seqNodes) visit(n.id)
+
     let items = laid.map((it, i) => ({
       ...it,
       status: seqNodes[i].status,
       nodeId: seqNodes[i].id,
       parentId: seqNodes[i].parentId,
+      label: labelFor ? labelFor(seqNodes[i].id, depthOf.get(seqNodes[i].id) ?? 0) : '',
     }))
 
     // 锚点 y = 父分支上锚点的 y（对齐分叉点）
