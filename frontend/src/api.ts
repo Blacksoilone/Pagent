@@ -113,3 +113,35 @@ export async function fetchProjects(): Promise<ProjectDTO[]> {
   if (!res.ok) throw new Error('fetch projects: ' + res.status)
   return res.json()
 }
+
+// 分支：在 anchor 节点位置创建平行分支（虚节点）（3.9.1）。
+export async function forkChain(chainId: string, anchorNodeId: string): Promise<NodeDTO> {
+  const res = await fetch(`/api/chains/${chainId}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ anchor_node_id: anchorNodeId }),
+  })
+  if (!res.ok) throw new Error(`fork: ${res.status}`)
+  return res.json()
+}
+
+// 提升节点为重要节点（3.5）。
+export async function promoteNode(chainId: string, nodeId: string): Promise<NodeDTO> {
+  const res = await fetch(`/api/chains/${chainId}/nodes/${nodeId}/promote`, { method: 'POST' })
+  if (!res.ok) throw new Error(`promote: ${res.status}`)
+  return res.json()
+}
+
+// 降低节点为普通节点（3.5）。
+export async function demoteNode(chainId: string, nodeId: string): Promise<NodeDTO> {
+  const res = await fetch(`/api/chains/${chainId}/nodes/${nodeId}/demote`, { method: 'POST' })
+  if (!res.ok) throw new Error(`demote: ${res.status}`)
+  return res.json()
+}
+
+// 实体化虚节点（3.6）。
+export async function materializeNode(chainId: string, nodeId: string): Promise<NodeDTO> {
+  const res = await fetch(`/api/chains/${chainId}/nodes/${nodeId}/materialize`, { method: 'POST' })
+  if (!res.ok) throw new Error(`materialize: ${res.status}`)
+  return res.json()
+}

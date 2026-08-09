@@ -127,6 +127,11 @@ async function send() {
   refresh()
 }
 
+// 分支操作回调：3.9.1 fork 需要警告影响面（被 fork 节点后继中被别链引用的节点）
+function onFork(anchorNodeId: string) {
+  toolLog.value.push('已分支：' + anchorNodeId.slice(0, 8) + '（新分支虚节点已创建，等待实化）')
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (scrollBox.value) scrollBox.value.scrollTop = scrollBox.value.scrollHeight
@@ -204,7 +209,9 @@ onMounted(refresh)
       </main>
 
       <!-- 链视图（手串） -->
-      <GraphView v-else :nodes="nodes" :settings="layoutSettings">
+      <GraphView v-else :chain-id="selectedChain" :nodes="nodes" :settings="layoutSettings"
+        @changed="refresh" @error="toolLog.push('操作失败: ' + $event)"
+        @fork="onFork">
         <template #title>
           <span>{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
         </template>

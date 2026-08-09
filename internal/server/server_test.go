@@ -191,3 +191,117 @@ func TestHandleChat_Should_RejectMissingMessage(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
+
+func doPostJSON(t *testing.T, s *Server, path string, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestHandlePromote_Should_UpgradeToImportant(t *testing.T) {
+	srv, _, _ := setupServer(t)
+	// 拿到链和节点
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	if len(chains) == 0 {
+		t.Fatal("no chains")
+	}
+	chainID := chains[0].ID
+	var nodes []NodeDTO
+	rec = doGet(t, srv, "/api/chains/"+chainID+"/nodes")
+	json.Unmarshal(rec.Body.Bytes(), &nodes)
+	if len(nodes) == 0 {
+		t.Fatal("no nodes")
+	}
+	nodeID := nodes[0].ID
+
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/nodes/"+nodeID+"/promote", "{}")
+	if rec.Code != 200 {
+		t.Fatalf("promote status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var out NodeDTO
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Kind != string(model.NodeKindImportant) {
+		t.Errorf("kind = %s, want important", out.Kind)
+	}
+
+	// 降低回 normal
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/nodes/"+nodeID+"/demote", "{}")
+	if rec.Code != 200 {
+		t.Fatalf("demote status = %d", rec.Code)
+	}
+}
+
+func TestHandlePromote_Should_RejectGhost(t *testing.T) {
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+
+	// fork 产生虚节点
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/fork", `{"anchor_node_id":"missing"}`)
+	if rec.Code != 400 {
+		t.Fatalf("fork with missing anchor should 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleMaterialize_Should_RejectNonGhost(t *testing.T) {
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+	var nodes []NodeDTO
+	rec = doGet(t, srv, "/api/chains/"+chainID+"/nodes")
+	json.Unmarshal(rec.Body.Bytes(), &nodes)
+
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/nodes/"+nodes[0].ID+"/materialize", "{}")
+	if rec.Code != 400 {
+		t.Fatalf("materialize normal node should 400, got %d", rec.Code)
+	}
+}
+
+func TestForkPromoteMaterialize_FullFlow(t *testing.T) {
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+	var nodes []NodeDTO
+	rec = doGet(t, srv, "/api/chains/"+chainID+"/nodes")
+	json.Unmarshal(rec.Body.Bytes(), &nodes)
+	anchorID := nodes[0].ID
+
+	// 1. fork → 产生虚节点
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/fork", `{"anchor_node_id":"`+anchorID+`"}`)
+	if rec.Code != 201 {
+		t.Fatalf("fork status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var fork NodeDTO
+	json.Unmarshal(rec.Body.Bytes(), &fork)
+	if fork.Kind != string(model.NodeKindGhost) {
+		t.Fatalf("fork kind = %s, want ghost", fork.Kind)
+	}
+
+	// 2. 虚节点 → 实化
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/nodes/"+fork.ID+"/materialize", "{}")
+	if rec.Code != 200 {
+		t.Fatalf("materialize status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 3. 实化后 → 提升
+	rec = doPostJSON(t, srv, "/api/chains/"+chainID+"/nodes/"+fork.ID+"/promote", "{}")
+	if rec.Code != 200 {
+		t.Fatalf("promote status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var out NodeDTO
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Kind != string(model.NodeKindImportant) {
+		t.Errorf("final kind = %s, want important", out.Kind)
+	}
+}

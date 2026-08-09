@@ -38,6 +38,9 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	mux.HandleFunc("POST /api/chains", s.handleCreateChain)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("POST /api/chains/{id}/fork", s.handleFork)
+	mux.HandleFunc("POST /api/chains/{id}/nodes/{nodeId}/promote", s.handlePromoteNode)
+	mux.HandleFunc("POST /api/chains/{id}/nodes/{nodeId}/demote", s.handleDemoteNode)
+	mux.HandleFunc("POST /api/chains/{id}/nodes/{nodeId}/materialize", s.handleMaterializeNode)
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
@@ -221,6 +224,64 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		ID: fork.ID, ParentID: fork.ParentID, Branch: fork.Branch,
 		Kind: string(fork.Kind), Status: string(fork.Status), Visible: true,
 	})
+}
+
+// handlePromoteNode 提升节点为重要节点（3.5）。
+func (s *Server) handlePromoteNode(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeId")
+	n, err := s.store.GetNode(nodeID)
+	if err != nil {
+		writeErr(w, 404, "节点不存在")
+		return
+	}
+	if n.Kind == model.NodeKindGhost {
+		writeErr(w, 400, "虚节点不能提升")
+		return
+	}
+	if err := s.store.UpdateNodeKind(nodeID, model.NodeKindImportant); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, NodeDTO{ID: n.ID, Kind: string(model.NodeKindImportant)})
+}
+
+// handleDemoteNode 降低节点为普通节点（3.5，用户可操作，模型不能主动降低）。
+func (s *Server) handleDemoteNode(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeId")
+	n, err := s.store.GetNode(nodeID)
+	if err != nil {
+		writeErr(w, 404, "节点不存在")
+		return
+	}
+	if n.Kind != model.NodeKindImportant {
+		writeErr(w, 400, "只有重要节点可降低")
+		return
+	}
+	if err := s.store.UpdateNodeKind(nodeID, model.NodeKindNormal); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, NodeDTO{ID: n.ID, Kind: string(model.NodeKindNormal)})
+}
+
+// handleMaterializeNode 实体化虚节点（3.6：虚节点是下一次 turn 的占位，
+// 通过实化成为普通节点；有子节点的虚节点违反不变量，拒绝）。
+func (s *Server) handleMaterializeNode(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeId")
+	n, err := s.store.GetNode(nodeID)
+	if err != nil {
+		writeErr(w, 404, "节点不存在")
+		return
+	}
+	if n.Kind != model.NodeKindGhost {
+		writeErr(w, 400, "只有虚节点可实化")
+		return
+	}
+	if err := s.store.UpdateNodeKind(nodeID, model.NodeKindNormal); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, NodeDTO{ID: n.ID, Kind: string(model.NodeKindNormal)})
 }
 
 func (s *Server) handleStatelines(w http.ResponseWriter, r *http.Request) {

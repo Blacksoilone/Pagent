@@ -772,6 +772,19 @@ func (d *DB) UpdateNodeStatus(nodeID string, status model.NodeStatus) error {
 	return err
 }
 
+// UpdateNodeKind 更新节点类型（normal → important / ghost → normal 等）。
+// 用于：3.5 提升/降低、3.6 虚节点实体化。
+func (d *DB) UpdateNodeKind(nodeID string, kind model.NodeKind) error {
+	res, err := d.raw.Exec(`UPDATE node SET kind = ? WHERE id = ?`, kind, nodeID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("node %s not found", nodeID)
+	}
+	return nil
+}
+
 // DeleteNode 删除节点及其 parts（级联）。仅用于虚节点被对话取代后的清理。
 func (d *DB) DeleteNode(nodeID string) error {
 	tx, err := d.raw.Begin()

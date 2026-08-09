@@ -1,13 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { computeBranchLayout, type BranchNode } from './branchLayout'
 import type { LayoutOptions } from './layout'
-import type { NodeDTO } from './api'
+import { forkChain, promoteNode, demoteNode, materializeNode, type NodeDTO } from './api'
 
 const props = defineProps<{
+  chainId: string
   nodes: NodeDTO[]
   settings: Required<LayoutOptions>
 }>()
+
+const emit = defineEmits<{
+  (e: 'changed'): void
+  (e: 'error', msg: string): void
+  (e: 'fork', anchorNodeId: string): void
+}>()
+
+// 节点操作菜单：选中节点 + 菜单位置（svg 坐标）
+const menu = ref<{ node: NodeDTO; x: number; y: number } | null>(null)
+const busy = ref(false)
 
 const branchResult = computed(() => {
   const bns: BranchNode[] = props.nodes.map(n => ({
@@ -24,6 +35,55 @@ const branchResult = computed(() => {
 })
 
 const braceletHeight = computed(() => branchResult.value.height)
+
+function openMenu(node: NodeDTO, x: number, y: number) {
+  menu.value = { node, x, y }
+}
+
+function closeMenu() {
+  menu.value = null
+}
+
+async function run(action: 'fork' | 'promote' | 'demote' | 'materialize') {
+  const m = menu.value
+  if (!m || busy.value) return
+  busy.value = true
+  try {
+    switch (action) {
+      case 'fork':
+        await forkChain(props.chainId, m.node.id)
+        emit('fork', m.node.id)
+        break
+      case 'promote':
+        await promoteNode(props.chainId, m.node.id)
+        break
+      case 'demote':
+        await demoteNode(props.chainId, m.node.id)
+        break
+      case 'materialize':
+        await materializeNode(props.chainId, m.node.id)
+        break
+    }
+    emit('changed')
+  } catch (e) {
+    emit('error', String(e))
+  } finally {
+    busy.value = false
+    closeMenu()
+  }
+}
+
+function menuActions(): { key: 'fork' | 'promote' | 'demote' | 'materialize'; label: string }[] {
+  const m = menu.value
+  if (!m) return []
+  const kind = m.node.kind
+  const actions: { key: 'fork' | 'promote' | 'demote' | 'materialize'; label: string }[] = []
+  actions.push({ key: 'fork', label: '分支' })
+  if (kind === 'normal') actions.push({ key: 'promote', label: '提升' })
+  if (kind === 'important') actions.push({ key: 'demote', label: '降低' })
+  if (kind === 'ghost') actions.push({ key: 'materialize', label: '实化' })
+  return actions
+}
 </script>
 
 <template>
@@ -34,7 +94,7 @@ const braceletHeight = computed(() => branchResult.value.height)
     </div>
     <div class="bracelet-wrap">
       <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
-        :width="branchResult.width">
+        :width="branchResult.width" @click="closeMenu">
         <!-- 分叉弧线：锚点 → 各分支第一个节点（倒 Y，左上 → 右下） -->
         <path v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
           :d="f.d"
@@ -45,9 +105,11 @@ const braceletHeight = computed(() => branchResult.value.height)
           :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
           :stroke="settings.colorLine" :stroke-width="settings.lineWidth"
           stroke-linecap="round" opacity="0.6" />
-        <!-- 珠子（后渲染，盖住链线交叉点） -->
+        <!-- 珠子（后渲染，盖住链线交叉点；可点击弹出操作菜单） -->
         <g v-for="(b, i) in branchResult.segments" :key="'seg-' + i">
-          <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
+          <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'"
+            class="bead-g" :class="{ selected: menu && menu.node.id === it.nodeId }"
+            @click.stop="openMenu(nodes.find(n => n.id === it.nodeId)!, b.x, it.y)">
             <circle
               :r="it.big ? settings.diamBig / 2 : settings.diamSmall / 2"
               :fill="it.node.ghost ? '#fff' : (it.big ? settings.colorBig : settings.colorSmall)"
@@ -56,16 +118,49 @@ const braceletHeight = computed(() => branchResult.value.height)
               :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
               :opacity="it.status === 'partial' ? 0.5 : 1"
             />
+            <!-- 选中放大圆环 -->
+            <circle v-if="menu && menu.node.id === it.nodeId"
+              :r="(it.big ? settings.diamBig : settings.diamSmall) / 2 + 5"
+              fill="none" stroke="#4a90d9" stroke-width="2" />
           </g>
         </g>
       </svg>
+    </div>
+
+    <!-- 节点操作菜单 -->
+    <div v-if="menu" class="node-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>
+      <div class="menu-title">{{ menu.node.kind === 'ghost' ? '虚节点' : menu.node.kind === 'important' ? '重要节点' : '节点' }}</div>
+      <button v-for="a in menuActions()" :key="a.key" class="menu-item" :disabled="busy" @click="run(a.key)">
+        {{ a.label }}
+      </button>
     </div>
   </main>
 </template>
 
 <style scoped>
-.graph-main { flex: 1; overflow: auto; padding: 16px; }
+.graph-main { flex: 1; overflow: auto; padding: 16px; position: relative; }
 .graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
 .bracelet-wrap { display: flex; justify-content: center; }
 .chain-svg { min-height: 300px; }
+.bead-g { cursor: pointer; }
+.bead-g:hover circle:first-of-type { filter: brightness(1.15); }
+
+.node-menu {
+  position: absolute;
+  background: #fff;
+  border: 1px solid #e3e3ec;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  min-width: 110px;
+  z-index: 10;
+}
+.menu-title { font-size: 11px; color: #9a9ab0; padding: 4px 8px 6px; }
+.menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 7px 10px; border: none; background: none;
+  font-size: 13px; color: #333; border-radius: 6px; cursor: pointer;
+}
+.menu-item:hover { background: #f0f0f5; }
+.menu-item:disabled { opacity: 0.5; cursor: default; }
 </style>
