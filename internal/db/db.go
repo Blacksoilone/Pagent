@@ -69,6 +69,7 @@ func (d *DB) migrate() error {
 			chain_id TEXT REFERENCES chain(id),
 			seq INTEGER NOT NULL DEFAULT 0,
 			parent_id TEXT REFERENCES node(id),
+			branch TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL DEFAULT 'normal',
 			status TEXT NOT NULL DEFAULT 'pending',
 			title TEXT,
@@ -192,6 +193,65 @@ func (d *DB) migrate() error {
 			return fmt.Errorf("exec schema: %w\n%s", err, s)
 		}
 	}
+	// 迁移：node 表补 branch 列（旧库没有）
+	if err := d.migrateBranch(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateBranch 为旧库的 node 表补充 branch 列并回填。
+func (d *DB) migrateBranch() error {
+	var hasBranch int
+	if err := d.raw.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('node') WHERE name='branch'`).Scan(&hasBranch); err != nil {
+		return err
+	}
+	if hasBranch == 0 {
+		if _, err := d.raw.Exec(`ALTER TABLE node ADD COLUMN branch TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add branch column: %w", err)
+		}
+		// 回填：每个节点的 branch = 分支根（沿 parent 链向上找无父/或自环），
+		// 简化：按链遍历，首节点 branch=自身，后代继承父
+		chains, err := d.ListChains()
+		if err != nil {
+			return err
+		}
+		for _, ch := range chains {
+			rows, err := d.raw.Query(`SELECT id, parent_id FROM node WHERE chain_id = ? ORDER BY seq`, ch.ID)
+			if err != nil {
+				return err
+			}
+			var pairs [][2]string
+			for rows.Next() {
+				var id string
+				var pid sql.NullString
+				if err := rows.Scan(&id, &pid); err != nil {
+					rows.Close()
+					return err
+				}
+				p := ""
+				if pid.Valid {
+					p = pid.String
+				}
+				pairs = append(pairs, [2]string{id, p})
+			}
+			rows.Close()
+			branchMap := map[string]string{}
+			for _, pr := range pairs {
+				id, pid := pr[0], pr[1]
+				b := id // 默认自身（首节点/无父）
+				if pid != "" {
+					if pb, ok := branchMap[pid]; ok && pb != "" {
+						b = pb
+					}
+				}
+				branchMap[id] = b
+				if _, err := d.raw.Exec(`UPDATE node SET branch = ? WHERE id = ?`, b, id); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -258,8 +318,36 @@ func (d *DB) GetChain(id string) (*model.Chain, error) {
 }
 
 // ListChainNodes 加载链的全部节点（含 parts）。
+// GetNode 加载单个节点（含 parts）。
+func (d *DB) GetNode(id string) (*model.Node, error) {
+	n := &model.Node{ID: id}
+	var parent, title, summary, copiedFrom, branch sql.NullString
+	var visible, seq int
+	err := d.raw.QueryRow(`SELECT chain_id, seq, parent_id, branch, kind, status, title, summary, visible, copied_from
+		FROM node WHERE id = ?`, id).
+		Scan(&n.ChainID, &seq, &parent, &branch, &n.Kind, &n.Status, &title, &summary, &visible, &copiedFrom)
+	if err != nil {
+		return nil, err
+	}
+	n.Seq = seq
+	if parent.Valid {
+		n.ParentID = parent.String
+	}
+	n.Branch = branch.String
+	n.Title = title.String
+	n.Summary = summary.String
+	n.CopiedFrom = copiedFrom.String
+	n.Visible = visible == 1
+	parts, err := d.loadParts(id)
+	if err != nil {
+		return nil, err
+	}
+	n.Parts = parts
+	return n, nil
+}
+
 func (d *DB) ListChainNodes(chainID string) ([]*model.Node, error) {
-	rows, err := d.raw.Query(`SELECT id, seq, parent_id, kind, status, title, summary, visible, copied_from
+	rows, err := d.raw.Query(`SELECT id, seq, parent_id, branch, kind, status, title, summary, visible, copied_from
 		FROM node WHERE chain_id = ? ORDER BY seq`, chainID)
 	if err != nil {
 		return nil, err
@@ -270,14 +358,16 @@ func (d *DB) ListChainNodes(chainID string) ([]*model.Node, error) {
 	for rows.Next() {
 		n := &model.Node{ChainID: chainID}
 		var visible int
-		var parent, title, summary, copiedFrom sql.NullString
+		var parent, title, summary, copiedFrom, branch sql.NullString
 		var seq int
-		if err := rows.Scan(&n.ID, &seq, &parent, &n.Kind, &n.Status, &title, &summary, &visible, &copiedFrom); err != nil {
+		if err := rows.Scan(&n.ID, &seq, &parent, &branch, &n.Kind, &n.Status, &title, &summary, &visible, &copiedFrom); err != nil {
 			return nil, err
 		}
+		n.Seq = seq
 		if parent.Valid {
 			n.ParentID = parent.String
 		}
+		n.Branch = branch.String
 		n.Title = title.String
 		n.Summary = summary.String
 		n.CopiedFrom = copiedFrom.String
@@ -338,11 +428,22 @@ func (d *DB) InsertNode(n *model.Node) error {
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM node WHERE chain_id = ?`, n.ChainID).Scan(&seq); err != nil {
 		return fmt.Errorf("compute seq: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO node (id, chain_id, seq, parent_id, kind, status, title, summary, visible, copied_from)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.ChainID, seq, parent, n.Kind, n.Status, n.Title, n.Summary, vis, n.CopiedFrom); err != nil {
+	// 分支继承：新节点默认继承父节点的 branch（父为空则用自身 ID）
+	branch := n.Branch
+	if branch == "" {
+		branch = n.ID
+	}
+	if n.ParentID != "" {
+		if p, err := d.GetNode(n.ParentID); err == nil && p.Branch != "" {
+			branch = p.Branch
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO node (id, chain_id, seq, parent_id, branch, kind, status, title, summary, visible, copied_from)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.ChainID, seq, parent, branch, n.Kind, n.Status, n.Title, n.Summary, vis, n.CopiedFrom); err != nil {
 		return fmt.Errorf("insert node: %w", err)
 	}
+	n.Branch = branch
 	for _, p := range n.Parts {
 		if _, err := tx.Exec(`INSERT INTO node_part (node_id, seq, role, content, token_count) VALUES (?, ?, ?, ?, ?)`,
 			n.ID, p.Seq, p.Role, p.Content, p.TokenCount); err != nil {
@@ -350,6 +451,30 @@ func (d *DB) InsertNode(n *model.Node) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ForkNode 在 anchor 节点位置创建新分支（3.9.1）。
+// 新分支根节点：parent = anchor 的 parent，branch = 新 ID，copied_from = anchor。
+// 返回新分支的虚节点（未落盘，调用方决定）。
+func (d *DB) ForkNode(chainID, anchorID string) (*model.Node, error) {
+	anchor, err := d.GetNode(anchorID)
+	if err != nil {
+		return nil, fmt.Errorf("anchor not found: %w", err)
+	}
+	if anchor.ChainID != chainID {
+		return nil, fmt.Errorf("anchor %s not in chain %s", anchorID, chainID)
+	}
+	// 新分支虚节点：父 = anchor 的父，分支 = 新 ID
+	fork := model.NewNode(chainID, anchor.ParentID, model.NodeKindGhost)
+	fork.Branch = fork.ID
+	fork.CopiedFrom = anchorID
+	// 复制 anchor 的引用集合（副本）
+	refs, err := d.ListReferencesFromNode(anchorID)
+	if err != nil {
+		return nil, err
+	}
+	_ = refs // TODO: 复制引用到新分支（reference 表需要分支感知）
+	return fork, nil
 }
 
 // ═══════════════ 横线 ═══════════════
@@ -479,6 +604,25 @@ func (d *DB) InsertReference(r model.Reference) error {
 	return err
 }
 
+// ListReferencesFromNode 返回某节点发出的全部引用。
+func (d *DB) ListReferencesFromNode(nodeID string) ([]model.Reference, error) {
+	rows, err := d.raw.Query(`SELECT id, from_node_id, to_node_id, from_chain_id, to_chain_id, kind, summary_snapshot
+		FROM reference WHERE from_node_id = ? ORDER BY id`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []model.Reference
+	for rows.Next() {
+		var r model.Reference
+		if err := rows.Scan(&r.ID, &r.FromNodeID, &r.ToNodeID, &r.FromChainID, &r.ToChainID, &r.Kind, &r.SummarySnapshot); err != nil {
+			return nil, err
+		}
+		refs = append(refs, r)
+	}
+	return refs, rows.Err()
+}
+
 // ListReferencesFrom 返回某链发出的全部引用。
 func (d *DB) ListReferencesFrom(chainID string) ([]model.Reference, error) {
 	rows, err := d.raw.Query(`SELECT id, from_node_id, to_node_id, from_chain_id, to_chain_id, kind, summary_snapshot
@@ -571,11 +715,22 @@ func (d *DB) InsertNodeStart(n *model.Node) error {
 	if err := d.raw.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM node WHERE chain_id = ?`, n.ChainID).Scan(&seq); err != nil {
 		return fmt.Errorf("compute seq: %w", err)
 	}
-	if _, err := d.raw.Exec(`INSERT INTO node (id, chain_id, seq, parent_id, kind, status, title, summary, visible, copied_from)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.ChainID, seq, parent, n.Kind, n.Status, n.Title, n.Summary, vis, n.CopiedFrom); err != nil {
+	branch := n.Branch
+	if branch == "" {
+		branch = n.ID
+		// 继承父节点的分支（普通对话延续当前分支）
+		if n.ParentID != "" {
+			if p, err := d.GetNode(n.ParentID); err == nil && p.Branch != "" {
+				branch = p.Branch
+			}
+		}
+	}
+	if _, err := d.raw.Exec(`INSERT INTO node (id, chain_id, seq, parent_id, branch, kind, status, title, summary, visible, copied_from)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.ChainID, seq, parent, branch, n.Kind, n.Status, n.Title, n.Summary, vis, n.CopiedFrom); err != nil {
 		return fmt.Errorf("insert node: %w", err)
 	}
+	n.Branch = branch
 	return nil
 }
 

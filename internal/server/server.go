@@ -37,6 +37,7 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	mux.HandleFunc("GET /api/chains", s.handleChains)
 	mux.HandleFunc("POST /api/chains", s.handleCreateChain)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
+	mux.HandleFunc("POST /api/chains/{id}/fork", s.handleFork)
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
@@ -119,7 +120,9 @@ func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
 // NodeDTO 节点的 API 表示（含 parts）。
 type NodeDTO struct {
 	ID       string    `json:"id"`
+	Seq      int       `json:"seq"`
 	ParentID string    `json:"parent_id,omitempty"`
+	Branch   string    `json:"branch"`
 	Kind     string    `json:"kind"`
 	Status   string    `json:"status"`
 	Title    string    `json:"title,omitempty"`
@@ -149,7 +152,7 @@ func (s *Server) handleChainNodes(w http.ResponseWriter, r *http.Request) {
 			parts = append(parts, PartDTO{Seq: p.Seq, Role: string(p.Role), Content: p.Content})
 		}
 		out = append(out, NodeDTO{
-			ID: n.ID, ParentID: n.ParentID, Kind: string(n.Kind),
+			ID: n.ID, Seq: n.Seq, ParentID: n.ParentID, Branch: n.Branch, Kind: string(n.Kind),
 			Status: string(n.Status), Title: n.Title, Summary: n.Summary, Visible: n.Visible,
 			Parts: parts,
 		})
@@ -190,6 +193,33 @@ func (s *Server) handleCreateChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, ChainDTO{ID: ch.ID, Name: ch.Name, Status: ch.Status})
+}
+
+// ForkRequest 创建分支请求。
+type ForkRequest struct {
+	AnchorNodeID string `json:"anchor_node_id"`
+}
+
+func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
+	chainID := r.PathValue("id")
+	var req ForkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AnchorNodeID == "" {
+		writeErr(w, 400, "anchor_node_id 不能为空")
+		return
+	}
+	fork, err := s.store.ForkNode(chainID, req.AnchorNodeID)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.store.InsertNodeStart(fork); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, NodeDTO{
+		ID: fork.ID, ParentID: fork.ParentID, Branch: fork.Branch,
+		Kind: string(fork.Kind), Status: string(fork.Status), Visible: true,
+	})
 }
 
 func (s *Server) handleStatelines(w http.ResponseWriter, r *http.Request) {

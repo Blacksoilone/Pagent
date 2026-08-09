@@ -119,7 +119,9 @@ type Chain struct {
 type Node struct {
 	ID         string
 	ChainID    string
+	Seq        int    // 链内序号（db 生成）
 	ParentID   string // 前驱节点（"" = 链根）
+	Branch     string // 分支 ID（默认 = 首节点 ID；fork 创建新分支）
 	Kind       NodeKind
 	Status     NodeStatus
 	Title      string     // 重要节点标题
@@ -225,7 +227,7 @@ func (c *Chain) Nodes() []*Node {
 }
 
 func NewNode(chainID, parentID string, kind NodeKind) *Node {
-	return &Node{
+	n := &Node{
 		ID:       NewID(),
 		ChainID:  chainID,
 		ParentID: parentID,
@@ -233,6 +235,8 @@ func NewNode(chainID, parentID string, kind NodeKind) *Node {
 		Status:   NodeStatusPending,
 		Visible:  true,
 	}
+	n.Branch = n.ID // 默认分支 = 自身 ID（首节点即分支根）
+	return n
 }
 
 var (
