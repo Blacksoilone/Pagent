@@ -197,6 +197,10 @@ func (d *DB) migrate() error {
 	if err := d.migrateBranch(); err != nil {
 		return err
 	}
+	// 迁移：实体化有子节点的虚节点（旧版本允许虚节点挂子节点，违反当前不变量）
+	if _, err := d.FixGhostWithChildren(); err != nil {
+		return fmt.Errorf("fix ghost with children: %w", err)
+	}
 	return nil
 }
 
@@ -477,13 +481,16 @@ func (d *DB) ForkNode(chainID, anchorID string) (*model.Node, error) {
 	return fork, nil
 }
 
+// ErrNoBranchTail 分支无节点。
+var ErrNoBranchTail = errors.New("no branch tail")
+
 // GetBranchTail 返回指定分支的最后一个节点 ID。
 func (d *DB) GetBranchTail(chainID, branch string) (string, error) {
 	var id string
 	err := d.raw.QueryRow(`SELECT id FROM node WHERE chain_id = ? AND branch = ?
 		ORDER BY seq DESC LIMIT 1`, chainID, branch).Scan(&id)
 	if err == sql.ErrNoRows {
-		return "", ErrNoStateline
+		return "", ErrNoBranchTail
 	}
 	return id, err
 }

@@ -44,65 +44,97 @@ export interface ForkConn {
   d: string
 }
 
+export interface BranchLayoutResult {
+  segments: BranchSegment[]
+  forks: ForkConn[]
+  width: number
+  height: number
+}
+
 export const BRANCH_X_OFFSET = 35
 export const BRANCH_Y_DROP = 36
 export const MAIN_X = 100
 
 // 分叉弧线：三次贝塞尔，先垂直向下再弯向分支（左上 → 右下）。
-function forkPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
+export function forkPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
   const dy = to.y - from.y
   const k = Math.max(20, dy * 0.6)
   return `M ${from.x},${from.y} C ${from.x},${from.y + k} ${to.x},${to.y - k} ${to.x},${to.y}`
 }
 
-export function computeBranchLayout(
-  nodes: BranchNode[],
-  options?: LayoutOptions,
-): { segments: BranchSegment[]; forks: ForkConn[]; width: number; height: number } {
-  if (nodes.length === 0) return { segments: [], forks: [], width: 300, height: 300 }
+// 列区间分配器：每列记录已占用竖直区间，新链优先复用不冲突的列。
+// 独立于布局算法，后续链生成/连接/合并可复用同一分配策略。
+export class ColumnAllocator {
+  private ranges = new Map<number, Array<[number, number]>>()
 
-  // 1. 按 branch 分组
+  isFree(col: number, y1: number, y2: number): boolean {
+    const rs = this.ranges.get(col)
+    if (!rs) return true
+    return !rs.some(([a, b]) => y1 <= b && y2 >= a)
+  }
+
+  reserve(col: number, y1: number, y2: number): void {
+    if (!this.ranges.has(col)) this.ranges.set(col, [])
+    this.ranges.get(col)!.push([y1, y2])
+  }
+
+  // 从 centerCol 向外对称找第一个竖直区间不冲突的列（-1,+1,-2,+2...）。
+  findFreeNear(centerCol: number, y1: number, y2: number, step: number = BRANCH_X_OFFSET): number {
+    let dist = 1
+    for (;;) {
+      for (const side of [-1, 1]) {
+        const cand = centerCol + side * dist * step
+        if (this.isFree(cand, y1, y2)) return cand
+      }
+      dist++
+    }
+  }
+
+  // 从 centerCol 向单侧（side = -1 左 / +1 右）逐列外移找不冲突列。
+  findFreeSide(centerCol: number, y1: number, y2: number, side: number, step: number = BRANCH_X_OFFSET): number {
+    let dist = 1
+    for (;;) {
+      const cand = centerCol + side * dist * step
+      if (this.isFree(cand, y1, y2)) return cand
+      dist++
+    }
+  }
+
+  columns(): number[] {
+    return [...this.ranges.keys()]
+  }
+
+  bounds(): { min: number; max: number } {
+    const cols = this.columns()
+    if (cols.length === 0) return { min: MAIN_X, max: MAIN_X }
+    return { min: Math.min(...cols), max: Math.max(...cols) }
+  }
+}
+
+// 纯函数：branch 分组 + 主链识别。
+export function groupByBranch(nodes: BranchNode[]): Map<string, BranchNode[]> {
   const groups = new Map<string, BranchNode[]>()
   for (const n of nodes) {
     if (!groups.has(n.branch)) groups.set(n.branch, [])
     groups.get(n.branch)!.push(n)
   }
+  return groups
+}
 
-  // 2. 找主链（根节点没有 copiedFrom 的分支）与其他分支
-  let mainBranch = ''
+// 纯函数：找主链（根节点没有 copiedFrom 的分支）。
+export function findMainBranch(groups: Map<string, BranchNode[]>): string {
   for (const [b, ns] of groups) {
-    if (!ns.some(n => n.copiedFrom)) { mainBranch = b; break }
+    if (!ns.some(n => n.copiedFrom)) return b
   }
-  if (!mainBranch) mainBranch = [...groups.keys()][0]
+  return [...groups.keys()][0] ?? ''
+}
 
-  const mainNodes = [...(groups.get(mainBranch)!)].sort((a, c) => a.seq - c.seq)
-  const forkBranches = [...groups.keys()].filter(b => b !== mainBranch)
-
-  if (forkBranches.length === 0) {
-    // 无分叉：单列线性布局
-    const laid = computeLayout(mainNodes.map(n => ({
-      id: n.id, important: n.kind === 'important', ghost: n.kind === 'ghost',
-    })), options)
-    const items: LayoutItem[] = laid.map((it, i) => ({
-      ...it,
-      status: mainNodes[i].status,
-      nodeId: mainNodes[i].id,
-      parentId: mainNodes[i].parentId,
-    }))
-    return {
-      segments: [{
-        x: MAIN_X,
-        items,
-        topY: items.length > 0 ? items[0].y : 8,
-        bottomY: items.length > 0 ? items[items.length - 1].y : 8,
-      }],
-      forks: [],
-      width: MAIN_X * 2 + 80,
-      height: Math.max(300, (items[items.length - 1]?.y ?? 8) + 20),
-    }
-  }
-
-  // 3. 收集分叉点：fork 分支根（copiedFrom 非空）的 parent 在主链上的节点
+// 纯函数：收集分叉点（fork 分支根 copiedFrom 非空 → 其 parent 在主链上的节点）。
+export function collectForkPoints(
+  mainNodes: BranchNode[],
+  forkBranches: string[],
+  groups: Map<string, BranchNode[]>,
+): { anchor: BranchNode; forks: BranchNode[][] }[] {
   const forkMap = new Map<string, BranchNode[][]>()
   for (const b of forkBranches) {
     const ns = [...(groups.get(b)!)].sort((a, c) => a.seq - c.seq)
@@ -112,40 +144,57 @@ export function computeBranchLayout(
     if (!forkMap.has(a.id)) forkMap.set(a.id, [])
     forkMap.get(a.id)!.push(ns)
   }
-  const forkPoints = [...forkMap.entries()]
+  return [...forkMap.entries()]
     .map(([anchorId, forks]) => ({
       anchor: mainNodes.find(n => n.id === anchorId)!,
       forks,
     }))
     .filter(p => p.anchor)
     .sort((a, c) => a.anchor.seq - c.anchor.seq)
+}
 
+// 纯函数：LayoutResult → LayoutItem（补 status/nodeId/parentId）。
+export function toLayoutItems(ns: BranchNode[], laid: LayoutResult[]): LayoutItem[] {
+  return laid.map((it, i) => ({
+    ...it,
+    status: ns[i].status,
+    nodeId: ns[i].id,
+    parentId: ns[i].parentId,
+  }))
+}
+
+function layoutSeq(ns: BranchNode[], options?: LayoutOptions) {
+  const lns: LayoutNode[] = ns.map(n => ({
+    id: n.id, important: n.kind === 'important', ghost: n.kind === 'ghost',
+  }))
+  return computeLayout(lns, options)
+}
+
+export function computeBranchLayout(nodes: BranchNode[], options?: LayoutOptions): BranchLayoutResult {
+  if (nodes.length === 0) return { segments: [], forks: [], width: 300, height: 300 }
+
+  const groups = groupByBranch(nodes)
+  const mainBranch = findMainBranch(groups)
+  if (!mainBranch) return { segments: [], forks: [], width: 300, height: 300 }
+
+  const mainNodes = [...(groups.get(mainBranch)!)].sort((a, c) => a.seq - c.seq)
+  const forkBranches = [...groups.keys()].filter(b => b !== mainBranch)
+
+  if (forkBranches.length === 0) {
+    return layoutSingleColumn(mainNodes, options)
+  }
+
+  const forkPoints = collectForkPoints(mainNodes, forkBranches, groups)
   if (forkPoints.length === 0) {
-    return computeBranchLayout(mainNodes, options)
+    return layoutSingleColumn(mainNodes, options)
   }
 
-  // 4. 列区间管理：每列记录已占用竖直区间，新链优先复用不冲突的列
-  const colRanges = new Map<number, Array<[number, number]>>()
-  const colFree = (col: number, y1: number, y2: number): boolean => {
-    const rs = colRanges.get(col)
-    if (!rs) return true
-    return !rs.some(([a, b]) => y1 <= b && y2 >= a)
-  }
-  const addRange = (col: number, y1: number, y2: number) => {
-    if (!colRanges.has(col)) colRanges.set(col, [])
-    colRanges.get(col)!.push([y1, y2])
-  }
-
-  const layoutSeq = (ns: BranchNode[]) => {
-    const lns: LayoutNode[] = ns.map(n => ({
-      id: n.id, important: n.kind === 'important', ghost: n.kind === 'ghost',
-    }))
-    return computeLayout(lns, options)
-  }
-
+  // 布局
+  const allocator = new ColumnAllocator()
   const segments: BranchSegment[] = []
   const forks: ForkConn[] = []
   let maxY = 300
+  allocator.reserve(MAIN_X, 0, 0)
 
   // 布局主链段，返回节点 id → y；lineTop 指定链线起始 y（竖直延续时用分叉点 y）
   const layoutMainSegment = (
@@ -153,40 +202,23 @@ export function computeBranchLayout(
     baseY?: number, lineTop?: number,
   ): Map<string, number> => {
     const ns = mainNodes.slice(start, end)
-    const laid = layoutSeq(ns)
-    let items: LayoutItem[] = laid.map((it, i) => ({
-      ...it,
-      status: ns[i].status,
-      nodeId: ns[i].id,
-      parentId: ns[i].parentId,
-    }))
+    let items = toLayoutItems(ns, layoutSeq(ns, options))
     if (baseY !== undefined && items.length > 0) {
       const shift = baseY - items[0].y
       items = items.map(it => ({ ...it, y: it.y + shift }))
     }
     if (items.length > 0) {
       const top = lineTop ?? items[0].y
-      segments.push({
-        x: col,
-        items,
-        topY: top,
-        bottomY: items[items.length - 1].y,
-      })
-      addRange(col, top, items[items.length - 1].y)
+      segments.push({ x: col, items, topY: top, bottomY: items[items.length - 1].y })
+      allocator.reserve(col, top, items[items.length - 1].y)
       maxY = Math.max(maxY, items[items.length - 1].y)
     }
     return new Map(items.map(it => [it.nodeId, it.y]))
   }
 
-  // 布局 fork 分支（先算 y 再分配列），返回 [列, 首珠 y]
-  const layoutForkBranch = (ns: BranchNode[], anchorCol: number, anchorY: number): [number, number] => {
-    const laid = layoutSeq(ns)
-    let items: LayoutItem[] = laid.map((it, i) => ({
-      ...it,
-      status: ns[i].status,
-      nodeId: ns[i].id,
-      parentId: ns[i].parentId,
-    }))
+  // 布局 fork 分支（先算 y 再分配列）
+  const layoutForkBranch = (ns: BranchNode[], anchorCol: number, anchorY: number): void => {
+    let items = toLayoutItems(ns, layoutSeq(ns, options))
     const firstY = anchorY + BRANCH_Y_DROP
     if (items.length > 0) {
       const shift = firstY - items[0].y
@@ -194,33 +226,13 @@ export function computeBranchLayout(
     }
     const y1 = items[0]?.y ?? firstY
     const y2 = items.length > 0 ? items[items.length - 1].y : firstY
-    // 从分叉点列向外对称找第一个竖直区间不冲突的列（-1,+1,-2,+2...）
-    let step = 1
-    let placed = false
-    while (!placed) {
-      for (const side of [-1, 1]) {
-        const cand = anchorCol + side * step * BRANCH_X_OFFSET
-        if (colFree(cand, y1, y2)) {
-          placed = true
-        addRange(cand, y1, y2)
-        segments.push({
-          x: cand,
-          items,
-          topY: y1,
-          bottomY: y2,
-        })
-        maxY = Math.max(maxY, y2)
-        forks.push({
-          from: { x: anchorCol, y: anchorY },
-          to: { x: cand, y: y1 },
-          d: forkPath({ x: anchorCol, y: anchorY }, { x: cand, y: y1 }),
-        })
-          return [cand, y1]
-        }
-      }
-      step++
-    }
-    return [anchorCol, y1]
+    const cand = allocator.findFreeNear(anchorCol, y1, y2)
+    allocator.reserve(cand, y1, y2)
+    segments.push({ x: cand, items, topY: y1, bottomY: y2 })
+    maxY = Math.max(maxY, y2)
+    const from = { x: anchorCol, y: anchorY }
+    const to = { x: cand, y: y1 }
+    forks.push({ from, to, d: forkPath(from, to) })
   }
 
   // 递归：主链 [startIdx..] 在 col 列，处理 forkPoints[fpIdx..]
@@ -236,7 +248,6 @@ export function computeBranchLayout(
       return
     }
 
-    // 祖先段（含分叉点）
     const yOf = layoutMainSegment(startIdx, anchorIdx + 1, col, baseY, lineTop)
     const anchorY = yOf.get(p.anchor.id) ?? 8
     maxY = Math.max(maxY, anchorY)
@@ -246,22 +257,15 @@ export function computeBranchLayout(
     const N = forkList.length + (hasTail ? 1 : 0)
     if (N === 0) return
 
-    // 主链继续段列：奇数 → 竖直（col）；偶数 → 最右一列（+35）
+    // 主链继续段列：奇数 → 竖直（col）；偶数 → 最右一列
     let tailCol = col
     if (N % 2 === 0) {
-      tailCol = col + BRANCH_X_OFFSET
-      // 若被占用则继续外移
-      while (!colFree(tailCol, anchorY + BRANCH_Y_DROP, anchorY + BRANCH_Y_DROP)) {
-        tailCol += BRANCH_X_OFFSET
-      }
+      tailCol = allocator.findFreeSide(col, anchorY + BRANCH_Y_DROP, anchorY + BRANCH_Y_DROP, 1)
     }
 
-    // fork 分支：左右交替分配不冲突列
-    let side = -1
-    for (let i = 0; i < forkList.length; i++) {
-      layoutForkBranch(forkList[i], col, anchorY)
-      // 交替方向：单 fork 时左；多 fork 时左右交替
-      side = -side
+    // fork 分支：对称分配不冲突列
+    for (const ns of forkList) {
+      layoutForkBranch(ns, col, anchorY)
     }
 
     // 主链继续段：偏移时画弧线，竖直时链线延续
@@ -269,12 +273,9 @@ export function computeBranchLayout(
       if (tailCol === col) {
         walk(anchorIdx + 1, fpIdx + 1, tailCol, anchorY + BRANCH_Y_DROP, anchorY)
       } else {
+        const from = { x: col, y: anchorY }
         const to = { x: tailCol, y: anchorY + BRANCH_Y_DROP }
-        forks.push({
-          from: { x: col, y: anchorY },
-          to,
-          d: forkPath({ x: col, y: anchorY }, to),
-        })
+        forks.push({ from, to, d: forkPath(from, to) })
         walk(anchorIdx + 1, fpIdx + 1, tailCol, anchorY + BRANCH_Y_DROP, undefined)
       }
     }
@@ -282,10 +283,23 @@ export function computeBranchLayout(
 
   walk(0, 0, MAIN_X)
 
-  const cols = [...colRanges.keys()]
-  const minCol = cols.length > 0 ? Math.min(...cols) : MAIN_X
-  const maxCol = cols.length > 0 ? Math.max(...cols) : MAIN_X
-  const width = maxCol - minCol + 140
+  const { min, max } = allocator.bounds()
+  return { segments, forks, width: max - min + 140, height: maxY + 20 }
+}
 
-  return { segments, forks, width, height: maxY + 20 }
+// 纯函数：无分叉时的单列布局。
+export function layoutSingleColumn(mainNodes: BranchNode[], options?: LayoutOptions): BranchLayoutResult {
+  let items = toLayoutItems(mainNodes, layoutSeq(mainNodes, options))
+  if (items.length === 0) return { segments: [], forks: [], width: 300, height: 300 }
+  return {
+    segments: [{
+      x: MAIN_X,
+      items,
+      topY: items[0].y,
+      bottomY: items[items.length - 1].y,
+    }],
+    forks: [],
+    width: MAIN_X * 2 + 80,
+    height: Math.max(300, items[items.length - 1].y + 20),
+  }
 }

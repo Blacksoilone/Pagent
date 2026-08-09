@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
 import { DEFAULT_OPTIONS, type LayoutOptions } from './layout'
-import { computeBranchLayout } from './branchLayout'
+import GraphView from './GraphView.vue'
 
 
 // ── 状态 ──
@@ -40,8 +40,6 @@ function saveSettings() {
   localStorage.setItem('pagent-layout', JSON.stringify(layoutSettings.value))
   layoutSettings.value = { ...layoutSettings.value } // 触发重算
 }
-const diamSmall = computed(() => layoutSettings.value.diamSmall)
-const diamBig = computed(() => layoutSettings.value.diamBig)
 const gapMultiplier = computed({
   get: () => layoutSettings.value.gapImportant / layoutSettings.value.diamBig,
   set: (v: number) => {
@@ -135,22 +133,6 @@ function scrollToBottom() {
   })
 }
 
-const branchResult = computed(() => {
-  const bns = nodes.value.map(n => ({
-    id: n.id,
-    seq: n.seq,
-    parentId: n.parent_id || '',
-    branch: n.branch || '',
-    kind: n.kind,
-    status: n.status,
-    copiedFrom: n.copied_from || '',
-    parts: n.parts,
-  }))
-  return computeBranchLayout(bns, layoutSettings.value)
-})
-
-const braceletHeight = computed(() => branchResult.value.height)
-
 onMounted(refresh)
 </script>
 
@@ -222,40 +204,11 @@ onMounted(refresh)
       </main>
 
       <!-- 链视图（手串） -->
-      <main v-else class="graph-main">
-        <div class="graph-toolbar">
+      <GraphView v-else :nodes="nodes" :settings="layoutSettings">
+        <template #title>
           <span>{{ chains.find(c => c.id === selectedChain)?.name || '未选择' }}</span>
-          <span class="node-count">{{ nodes.length }} 个节点</span>
-        </div>
-        <div class="bracelet-wrap">
-          <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
-            :width="branchResult.width">
-            <!-- 分叉弧线：锚点 → 各分支第一个节点（倒 Y，左上 → 右下） -->
-            <path v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
-              :d="f.d"
-              :stroke="layoutSettings.colorLine" :stroke-width="1.5"
-              fill="none" stroke-linecap="round" opacity="0.7" />
-            <!-- 链线（串绳）：先于珠子渲染，保证珠子盖住线 -->
-            <line v-for="(b, i) in branchResult.segments" :key="'segline-' + i"
-              :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
-              :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
-              stroke-linecap="round" opacity="0.6" />
-            <!-- 珠子（后渲染，盖住链线交叉点） -->
-            <g v-for="(b, i) in branchResult.segments" :key="'seg-' + i">
-              <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
-                <circle
-                  :r="it.big ? diamBig / 2 : diamSmall / 2"
-                  :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"
-                  :stroke="it.node.ghost ? layoutSettings.colorSmall : (it.big ? layoutSettings.colorBig : 'none')"
-                  :stroke-width="it.node.ghost ? 2 : 0"
-                  :stroke-dasharray="it.node.ghost ? '3,2' : 'none'"
-                  :opacity="it.status === 'partial' ? 0.5 : 1"
-                />
-              </g>
-            </g>
-          </svg>
-        </div>
-      </main>
+        </template>
+      </GraphView>
 
       <!-- 设置面板 -->
     <div v-if="showSettings" class="settings-overlay" @click.self="showSettings = false">
@@ -401,11 +354,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 @keyframes blink { 50% { opacity: 0; } }
 .tool-log { margin-top: 8px; }
 .tool-item { font-size: 12px; color: #8e8ea0; font-family: ui-monospace, monospace; padding: 3px 0; }
-
-.graph-main { flex: 1; overflow: auto; padding: 16px; }
-.graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
-.bracelet-wrap { display: flex; justify-content: center; }
-.chain-svg { min-height: 300px; }
 
 .settings-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.3);

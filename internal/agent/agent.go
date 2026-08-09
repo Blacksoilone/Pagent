@@ -200,24 +200,7 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onS
 		return err
 	}
 	// 父节点 = 指定分支的最后一个节点（若指定分支）；否则链尾
-	parentID := ""
-	ghostToRemove := ""
-	ghostCopiedFrom := ""
-	if branch != "" {
-		if last, err := r.Store.GetBranchTail(chainID, branch); err == nil {
-			// 虚节点不能有子节点：若分支尾是虚节点，对话节点取代它
-			if lastNode, err2 := r.Store.GetNode(last); err2 == nil && lastNode.Kind == model.NodeKindGhost {
-				parentID = lastNode.ParentID
-				ghostToRemove = last
-				ghostCopiedFrom = lastNode.CopiedFrom
-			} else {
-				parentID = last
-			}
-		}
-	}
-	if parentID == "" && len(history) > 0 {
-		parentID = history[len(history)-1].NodeID
-	}
+	parentID, ghostToRemove, ghostCopiedFrom := r.resolveBranchTail(chainID, branch, history)
 	_, err = eng.Run(ctx, runtime.RunInput{
 		Prebuilt:   assembled,
 		UserInput:  userInput,
@@ -228,10 +211,8 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onS
 	})
 	// 对话节点取代虚节点：删除被取代的虚节点（仅当对话节点已落盘且虚节点仍存在）
 	if ghostToRemove != "" && eng.Node() != nil {
-		if _, gerr := r.Store.GetNode(ghostToRemove); gerr == nil {
-			if derr := r.Store.DeleteNode(ghostToRemove); derr != nil {
-				return derr
-			}
+		if derr := r.replaceGhost(ghostToRemove); derr != nil {
+			return derr
 		}
 	}
 	if onDone != nil && eng.Node() != nil {
@@ -244,6 +225,32 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onS
 		}
 	}
 	return err
+}
+
+// resolveBranchTail 确定对话父节点。
+// 虚节点不能有子节点：若分支尾是虚节点，父节点回退到虚节点的父，
+// 并返回待删除的虚节点及其 CopiedFrom（对话节点取代虚节点后保留 fork 标记）。
+func (r *Runner) resolveBranchTail(chainID, branch string, history []model.NodePart) (parentID, ghostID, copiedFrom string) {
+	if branch != "" {
+		if last, err := r.Store.GetBranchTail(chainID, branch); err == nil {
+			if lastNode, err2 := r.Store.GetNode(last); err2 == nil && lastNode.Kind == model.NodeKindGhost {
+				return lastNode.ParentID, last, lastNode.CopiedFrom
+			}
+			return last, "", ""
+		}
+	}
+	if len(history) > 0 {
+		return history[len(history)-1].NodeID, "", ""
+	}
+	return "", "", ""
+}
+
+// replaceGhost 删除被对话节点取代的虚节点（幂等：不存在则忽略）。
+func (r *Runner) replaceGhost(ghostID string) error {
+	if _, err := r.Store.GetNode(ghostID); err != nil {
+		return nil // 已不存在（如对话失败未落盘）
+	}
+	return r.Store.DeleteNode(ghostID)
 }
 
 // ensureTailGhost 确保分支末尾有虚节点：对话节点后补一个。
