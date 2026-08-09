@@ -235,13 +235,13 @@ onMounted(refresh)
               :d="f.d"
               :stroke="layoutSettings.colorLine" :stroke-width="1.5"
               fill="none" stroke-linecap="round" opacity="0.7" />
-            <!-- 每条分支 -->
+            <!-- 链线（串绳）：先于珠子渲染，保证珠子盖住线 -->
+            <line v-for="(b, i) in branchResult.segments" :key="'segline-' + i"
+              :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
+              :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
+              stroke-linecap="round" opacity="0.6" />
+            <!-- 珠子（后渲染，盖住链线交叉点） -->
             <g v-for="(b, i) in branchResult.segments" :key="'seg-' + i">
-              <!-- 链线（串绳）：只画该分支自己的范围 -->
-              <line :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
-                :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
-                stroke-linecap="round" opacity="0.6" />
-              <!-- 珠子 -->
               <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
                 <circle
                   :r="it.big ? diamBig / 2 : diamSmall / 2"
