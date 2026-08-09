@@ -40,7 +40,7 @@ export interface ForkConn {
   d: string
 }
 
-export const BRANCH_X_OFFSET = 50
+export const BRANCH_X_OFFSET = 35
 export const BRANCH_Y_DROP = 36
 export const MAIN_X = 100
 
