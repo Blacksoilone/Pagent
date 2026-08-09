@@ -3,7 +3,7 @@ import { computed, onMounted, ref, nextTick } from 'vue'
 import { chat, fetchChainNodes, fetchChains, fetchProjects, type ChainDTO, type NodeDTO, type ProjectDTO } from './api'
 import { DEFAULT_OPTIONS, type LayoutOptions } from './layout'
 import { computeBranchLayout } from './branchLayout'
-import { nodeLabel } from './label'
+
 
 // ── 状态 ──
 const projects = ref<ProjectDTO[]>([])
@@ -146,9 +146,7 @@ const branchResult = computed(() => {
     copiedFrom: n.copied_from || '',
     parts: n.parts,
   }))
-  const chainName = chains.value.find(c => c.id === selectedChain.value)?.name || selectedChain.value
-  return computeBranchLayout(bns, layoutSettings.value,
-    (nodeId, depth) => nodeLabel(nodeId, depth, chainName))
+  return computeBranchLayout(bns, layoutSettings.value)
 })
 
 const braceletHeight = computed(() => branchResult.value.height)
@@ -232,16 +230,19 @@ onMounted(refresh)
         <div class="bracelet-wrap">
           <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
             :width="branchResult.width">
-            <!-- 每条分支（倒 Y：两条链从 fork 点分叉向下） -->
+            <!-- 分叉连接线：锚点 → 各分支第一个节点（倒 Y） -->
+            <line v-for="(f, i) in branchResult.forks" :key="'fork-' + i"
+              :x1="f.from.x" :y1="f.from.y" :x2="f.to.x" :y2="f.to.y"
+              :stroke="layoutSettings.colorLine" :stroke-width="1.5"
+              stroke-linecap="round" opacity="0.5" stroke-dasharray="4,3" />
+            <!-- 每条分支 -->
             <g v-for="b in branchResult.branches" :key="'br-' + b.branch">
-              <!-- 链线（串绳）：只画该分支自己的范围（倒 Y，fork 分支从 fork 点开始） -->
+              <!-- 链线（串绳）：只画该分支自己的范围 -->
               <line :x1="b.x" :y1="b.topY" :x2="b.x" :y2="b.bottomY"
                 :stroke="layoutSettings.colorLine" :stroke-width="layoutSettings.lineWidth"
                 stroke-linecap="round" opacity="0.6" />
               <!-- 珠子 -->
               <g v-for="it in b.items" :key="it.node.id" :transform="'translate(' + b.x + ',' + it.y + ')'">
-                <text :y="-(it.big ? diamBig / 2 : diamSmall / 2) - 4" text-anchor="middle"
-                  font-size="7" fill="#aaa" class="node-label">{{ it.label }}</text>
                 <circle
                   :r="it.big ? diamBig / 2 : diamSmall / 2"
                   :fill="it.node.ghost ? '#fff' : (it.big ? layoutSettings.colorBig : layoutSettings.colorSmall)"
