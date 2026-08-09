@@ -248,6 +248,7 @@ func (s *Server) handleStatelines(w http.ResponseWriter, r *http.Request) {
 type ChatRequest struct {
 	ChainID string `json:"chain_id"`
 	Message string `json:"message"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +277,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 用共享 Runner 执行会话（权限/工具/文件事务/横线回调全部内置）
 	runner := agent.NewRunner(s.store, s.provider, s.workDir)
-	err := runner.Run(r.Context(), req.ChainID, req.Message,
+	err := runner.Run(r.Context(), req.ChainID, req.Message, req.Branch,
 		func(p provider.StreamPart) {
 			switch p.Type {
 			case provider.PartText:

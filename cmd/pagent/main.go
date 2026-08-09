@@ -190,7 +190,7 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 
 	cl := provider.New(baseURL, apiKey, modelName)
 	runner := agent.NewRunner(store, cl, workDir)
-	err = runner.Run(ctx, target.ID, msg, func(p provider.StreamPart) {
+	err = runner.Run(ctx, target.ID, msg, "", func(p provider.StreamPart) {
 		if p.Type == provider.PartText {
 			fmt.Print(p.Text)
 		}

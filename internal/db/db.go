@@ -477,6 +477,17 @@ func (d *DB) ForkNode(chainID, anchorID string) (*model.Node, error) {
 	return fork, nil
 }
 
+// GetBranchTail 返回指定分支的最后一个节点 ID。
+func (d *DB) GetBranchTail(chainID, branch string) (string, error) {
+	var id string
+	err := d.raw.QueryRow(`SELECT id FROM node WHERE chain_id = ? AND branch = ?
+		ORDER BY seq DESC LIMIT 1`, chainID, branch).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", ErrNoStateline
+	}
+	return id, err
+}
+
 // ═══════════════ 横线 ═══════════════
 
 func (d *DB) InsertStateline(sl *model.Stateline) error {

@@ -165,7 +165,7 @@ func (r *Runner) AssembleMessages(history []model.NodePart, userInput string) ([
 }
 
 // Run 执行一次会话（加载历史 → 组装 → 运行）。
-func (r *Runner) Run(ctx context.Context, chainID, userInput string, onStream func(provider.StreamPart), onDone func(nodeID string, status model.NodeStatus)) error {
+func (r *Runner) Run(ctx context.Context, chainID, userInput, branch string, onStream func(provider.StreamPart), onDone func(nodeID string, status model.NodeStatus)) error {
 	ch, err := r.Store.GetChain(chainID)
 	if err != nil {
 		return err
@@ -199,8 +199,14 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput string, onStream fu
 	if err != nil {
 		return err
 	}
+	// 父节点 = 指定分支的最后一个节点（若指定分支）；否则链尾
 	parentID := ""
-	if len(history) > 0 {
+	if branch != "" {
+		if last, err := r.Store.GetBranchTail(chainID, branch); err == nil {
+			parentID = last
+		}
+	}
+	if parentID == "" && len(history) > 0 {
 		parentID = history[len(history)-1].NodeID
 	}
 	_, err = eng.Run(ctx, runtime.RunInput{
@@ -208,6 +214,7 @@ func (r *Runner) Run(ctx context.Context, chainID, userInput string, onStream fu
 		UserInput: userInput,
 		ChainID:   chainID,
 		ParentID:  parentID,
+		Branch:    branch,
 	})
 	if onDone != nil && eng.Node() != nil {
 		onDone(eng.Node().ID, eng.Node().Status)

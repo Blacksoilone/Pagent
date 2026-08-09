@@ -178,7 +178,7 @@ data: [DONE]
 
 	cl := provider.New(srv.URL, "k", "m")
 	runner := NewRunner(store, cl, t.TempDir())
-	err := runner.Run(context.Background(), ch.ID, "继续", nil, nil)
+	err := runner.Run(context.Background(), ch.ID, "继续", "", nil, nil)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
