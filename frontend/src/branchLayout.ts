@@ -1,13 +1,12 @@
-// 分支布局：倒 Y（二叉树）分叉。
+// 分支布局：倒 Y（二叉树）分叉，全部纵向。
 //
 // 结构：
-//   共同祖先段（A1→A2→A3）画在中间 x=100
-//   分叉后每条分支向两侧偏移：
-//     原链继续 A4→A5...   x = 100 + offset（右）
-//     fork 分支 A4'→A5'... x = 100 - offset（左）
-//   A3 用斜线连到每条分支的第一个节点
-//
-// 每条分支从 fork 点位置开始向下（虚节点在各自底部）。
+//   共同祖先段（A1→A2→A3）画在中间列 x=MAIN_X
+//   分叉后每条分支偏移到自己的列：
+//     主链继续（A4→A5...）  x = MAIN_X + BRANCH_X_OFFSET（右列）
+//     fork 分支（A4'→...）  x = MAIN_X - BRANCH_X_OFFSET（左列）
+//   A3 用斜线分别连到两条分支的第一个节点
+//   所有链纵向（从上到下），虚节点在底部
 
 import { computeLayout, type LayoutNode, type LayoutResult, type LayoutOptions } from './layout'
 
@@ -28,27 +27,26 @@ export interface LayoutItem extends LayoutResult {
   parentId: string
 }
 
-export interface ForkConn {
-  from: { x: number; y: number }  // 分叉点位置
-  to: { x: number; y: number }    // 分支第一个节点位置
-}
-
-export interface BranchLayoutItem {
-  branch: string
+export interface BranchSegment {
   x: number
   items: LayoutItem[]
   topY: number
   bottomY: number
 }
 
-export const BRANCH_X_OFFSET = 80 // 分叉水平偏移
-export const MAIN_X = 100         // 共同祖先段 x
+export interface ForkConn {
+  from: { x: number; y: number }
+  to: { x: number; y: number }
+}
+
+export const BRANCH_X_OFFSET = 80
+export const MAIN_X = 100
 
 export function computeBranchLayout(
   nodes: BranchNode[],
   options?: LayoutOptions,
-): { branches: BranchLayoutItem[]; forks: ForkConn[]; width: number; height: number } {
-  if (nodes.length === 0) return { branches: [], forks: [], width: 300, height: 300 }
+): { segments: BranchSegment[]; forks: ForkConn[]; width: number; height: number } {
+  if (nodes.length === 0) return { segments: [], forks: [], width: 300, height: 300 }
 
   // 1. 按 branch 分组
   const groups = new Map<string, BranchNode[]>()
@@ -57,8 +55,7 @@ export function computeBranchLayout(
     groups.get(n.branch)!.push(n)
   }
 
-  // 2. 找主链（未被 fork 出的）与其他分支
-  //    主链 = 根节点没有 copiedFrom 的分支
+  // 2. 找主链（根节点没有 copiedFrom 的分支）与其他分支
   let mainBranch = ''
   for (const [b, ns] of groups) {
     if (!ns.some(n => n.copiedFrom)) { mainBranch = b; break }
@@ -66,90 +63,117 @@ export function computeBranchLayout(
   if (!mainBranch) mainBranch = [...groups.keys()][0]
 
   const mainNodes = [...(groups.get(mainBranch)!)].sort((a, c) => a.seq - c.seq)
-  const otherBranches = [...groups.keys()].filter(b => b !== mainBranch)
 
-  // 3. 主链布局（完整链）
+  // 3. 找 fork 锚点（第一个 fork 分支根的 parent）
+  //    只支持一级 fork：锚点在主链上
+  let anchor: BranchNode | undefined
+  let forkBranch = ''
+  for (const [b, ns] of groups) {
+    if (b === mainBranch) continue
+    const root = ns.find(n => n.copiedFrom) || ns[0]
+    const a = mainNodes.find(n => n.id === root.parentId)
+    if (a) { anchor = a; forkBranch = b; break }
+  }
+
+  // 4. 分割主链：锚点之前（含锚点）= 祖先段；锚点之后 = 主链继续段
+  let ancestorNodes: BranchNode[] = mainNodes
+  let mainTailNodes: BranchNode[] = []
+  if (anchor) {
+    const anchorIdx = mainNodes.findIndex(n => n.id === anchor!.id)
+    if (anchorIdx >= 0) {
+      ancestorNodes = mainNodes.slice(0, anchorIdx + 1)
+      mainTailNodes = mainNodes.slice(anchorIdx + 1)
+    }
+  }
+
+  // 5. 布局祖先段（中间列）
   const layoutSeq = (ns: BranchNode[]) => {
     const lns: LayoutNode[] = ns.map(n => ({
       id: n.id, important: n.kind === 'important', ghost: n.kind === 'ghost',
     }))
     return computeLayout(lns, options)
   }
-  const mainLaid = layoutSeq(mainNodes)
-  const mainItems: LayoutItem[] = mainLaid.map((it, i) => ({
-    ...it,
-    status: mainNodes[i].status,
-    nodeId: mainNodes[i].id,
-    parentId: mainNodes[i].parentId,
-  }))
-  const mainYOf = new Map(mainItems.map(it => [it.nodeId, it.y]))
 
-  const branches: BranchLayoutItem[] = []
+  const ancestorLaid = layoutSeq(ancestorNodes)
+  const ancestorItems: LayoutItem[] = ancestorLaid.map((it, i) => ({
+    ...it,
+    status: ancestorNodes[i].status,
+    nodeId: ancestorNodes[i].id,
+    parentId: ancestorNodes[i].parentId,
+  }))
+  const yOf = new Map(ancestorItems.map(it => [it.nodeId, it.y]))
+
+  const segments: BranchSegment[] = []
   const forks: ForkConn[] = []
   let maxY = 0
 
-  branches.push({
-    branch: mainBranch, x: MAIN_X, items: mainItems,
-    topY: mainItems.length > 0 ? mainItems[0].y : 8,
-    bottomY: mainItems.length > 0 ? mainItems[mainItems.length - 1].y : 8,
+  segments.push({
+    x: MAIN_X,
+    items: ancestorItems,
+    topY: ancestorItems.length > 0 ? ancestorItems[0].y : 8,
+    bottomY: ancestorItems.length > 0 ? ancestorItems[ancestorItems.length - 1].y : 8,
   })
-  if (mainItems.length > 0) maxY = Math.max(maxY, mainItems[mainItems.length - 1].y)
+  if (ancestorItems.length > 0) maxY = Math.max(maxY, ancestorItems[ancestorItems.length - 1].y)
 
-  // 4. 其他分支：从 fork 锚点位置分叉
-  const mainById = new Map(mainNodes.map(n => [n.id, n]))
-
-  for (const b of otherBranches) {
-    const ns = [...(groups.get(b)!)].sort((a, c) => a.seq - c.seq)
-    // 找 fork 锚点：分支根（copiedFrom 非空）的 parent 在主链上的位置
-    const root = ns.find(n => n.copiedFrom) || ns[0]
-    const anchor = mainById.get(root.parentId)
-    if (!anchor) {
-      // 锚点不在主链（多级 fork 暂不支持），跳过或放右侧
-      continue
-    }
-    const anchorY = mainYOf.get(anchor.id) ?? 8
-
-    // 分支布局：从锚点之后开始（不含锚点）
-    const branchNodes = ns.filter(n => n.id !== anchor.id)
-    const branchLaid = layoutSeq(branchNodes)
-    let branchItems: LayoutItem[] = branchLaid.map((it, i) => ({
+  // 6. 主链继续段（右列）：从锚点 y 开始
+  if (mainTailNodes.length > 0) {
+    const anchorY = anchor ? (yOf.get(anchor.id) ?? 8) : 8
+    const laid = layoutSeq(mainTailNodes)
+    let items: LayoutItem[] = laid.map((it, i) => ({
       ...it,
-      status: branchNodes[i].status,
-      nodeId: branchNodes[i].id,
-      parentId: branchNodes[i].parentId,
+      status: mainTailNodes[i].status,
+      nodeId: mainTailNodes[i].id,
+      parentId: mainTailNodes[i].parentId,
     }))
-
-    // 平移：使分支第一个节点从锚点位置开始（时间连续）
-    if (branchItems.length > 0) {
-      const shift = anchorY - branchItems[0].y
-      branchItems = branchItems.map(it => ({ ...it, y: it.y + shift }))
+    // 平移：使第一个节点从锚点 y 开始
+    if (items.length > 0) {
+      const shift = anchorY - items[0].y
+      items = items.map(it => ({ ...it, y: it.y + shift }))
     }
-
-    // 分叉方向：交替左右（第一个 fork 左，第二个右……但无主次，这里简单左）
-    const x = MAIN_X - BRANCH_X_OFFSET
-
-    branches.push({
-      branch: b, x, items: branchItems,
-      topY: branchItems.length > 0 ? branchItems[0].y : anchorY,
-      bottomY: branchItems.length > 0 ? branchItems[branchItems.length - 1].y : anchorY,
+    const x = MAIN_X + BRANCH_X_OFFSET
+    segments.push({
+      x,
+      items,
+      topY: items.length > 0 ? items[0].y : anchorY,
+      bottomY: items.length > 0 ? items[items.length - 1].y : anchorY,
     })
+    if (anchor) {
+      forks.push({ from: { x: MAIN_X, y: anchorY }, to: { x, y: items[0]?.y ?? anchorY } })
+    }
+    if (items.length > 0) maxY = Math.max(maxY, items[items.length - 1].y)
+  }
 
-    // 分叉连接：锚点 → 分支第一个节点
-    if (branchItems.length > 0) {
-      forks.push({
-        from: { x: MAIN_X, y: anchorY },
-        to: { x, y: branchItems[0].y },
-      })
+  // 7. fork 分支段（左列）：从锚点 y 开始
+  if (anchor && forkBranch) {
+    const forkNodes = [...(groups.get(forkBranch)!)].sort((a, c) => a.seq - c.seq)
+    // 分支根是虚节点（fork 出口），保留；不含锚点
+    const anchorY = yOf.get(anchor.id) ?? 8
+    const laid = layoutSeq(forkNodes)
+    let items: LayoutItem[] = laid.map((it, i) => ({
+      ...it,
+      status: forkNodes[i].status,
+      nodeId: forkNodes[i].id,
+      parentId: forkNodes[i].parentId,
+    }))
+    if (items.length > 0) {
+      const shift = anchorY - items[0].y
+      items = items.map(it => ({ ...it, y: it.y + shift }))
     }
-    if (branchItems.length > 0) {
-      maxY = Math.max(maxY, branchItems[branchItems.length - 1].y)
-    }
+    const x = MAIN_X - BRANCH_X_OFFSET
+    segments.push({
+      x,
+      items,
+      topY: items.length > 0 ? items[0].y : anchorY,
+      bottomY: items.length > 0 ? items[items.length - 1].y : anchorY,
+    })
+    forks.push({ from: { x: MAIN_X, y: anchorY }, to: { x, y: items[0]?.y ?? anchorY } })
+    if (items.length > 0) maxY = Math.max(maxY, items[items.length - 1].y)
   }
 
   return {
-    branches,
+    segments,
     forks,
-    width: MAIN_X + BRANCH_X_OFFSET + 80,
+    width: MAIN_X + BRANCH_X_OFFSET * 2 + 80,
     height: Math.max(300, maxY + 20),
   }
 }
