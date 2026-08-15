@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"pagent/internal/agent"
+	"pagent/internal/config"
 	"pagent/internal/db"
 	"pagent/internal/model"
 	"pagent/internal/provider"
@@ -32,8 +33,8 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("pagent", flag.ExitOnError)
 	workDir := fs.String("dir", "", "工作区路径（默认 $HOME/.pagent）")
-	modelName := fs.String("model", "deepseek-chat", "模型名称")
-	baseURL := fs.String("base-url", "https://api.deepseek.com/v1", "OpenAI 兼容接口地址")
+	modelName := fs.String("model", "", "模型名称（默认取配置文件）")
+	baseURL := fs.String("base-url", "", "OpenAI 兼容接口地址（默认取配置文件）")
 	chainID := fs.String("chain", "", "目标链 ID（默认第一条链）")
 
 	if err := fs.Parse(args); err != nil {
@@ -47,6 +48,9 @@ func run(args []string) error {
 	var msg string
 	for i := 0; i < len(rest); i++ {
 		switch {
+		case rest[i] == "--dir" && i+1 < len(rest):
+			*workDir = rest[i+1]
+			i++
 		case rest[i] == "--base-url" && i+1 < len(rest):
 			*baseURL = rest[i+1]
 			i++
@@ -65,8 +69,6 @@ func run(args []string) error {
 		}
 	}
 
-	apiKey := os.Getenv("PAGENT_API_KEY")
-
 	if *workDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -77,8 +79,36 @@ func run(args []string) error {
 	if err := os.MkdirAll(*workDir, 0o755); err != nil {
 		return err
 	}
+
+	// 配置文件（config.json）加载；优先级：命令行 > 配置文件 > 环境变量 > 默认值
+	cfg, err := config.Load(*workDir)
+	if err != nil {
+		return fmt.Errorf("读取配置 %s: %w", config.Path(*workDir), err)
+	}
+	if *baseURL == "" {
+		*baseURL = cfg.BaseURL
+	}
+	if *modelName == "" {
+		*modelName = cfg.Model
+	}
+	apiKey := cfg.APIKey
 	if apiKey == "" {
-		return fmt.Errorf("环境变量 PAGENT_API_KEY 未设置")
+		apiKey = os.Getenv("PAGENT_API_KEY")
+	}
+
+	if sub == "init" {
+		// init 也需要 store；api_key 不强制（配置阶段允许为空）
+		store, err := db.Open(filepath.Join(*workDir, "pagent.db"))
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		ctx := context.Background()
+		return cmdInit(ctx, store, *workDir)
+	}
+
+	if apiKey == "" {
+		return fmt.Errorf("未配置 API Key（config.json 的 api_key 或环境变量 PAGENT_API_KEY）")
 	}
 
 	store, err := db.Open(filepath.Join(*workDir, "pagent.db"))
@@ -89,8 +119,6 @@ func run(args []string) error {
 
 	ctx := context.Background()
 	switch sub {
-	case "init":
-		return cmdInit(ctx, store, *workDir)
 	case "chains":
 		return cmdListChains(ctx, store)
 	case "chat":
@@ -99,7 +127,7 @@ func run(args []string) error {
 		}
 		return cmdChat(ctx, store, msg, *chainID, *modelName, *baseURL, apiKey, *workDir)
 	case "serve":
-		return cmdServe(ctx, store, *modelName, *baseURL, apiKey, *workDir)
+		return cmdServe(ctx, store, *modelName, *baseURL, apiKey, *workDir, cfg.TestMode)
 	default:
 		return fmt.Errorf("未知命令 %q（可用：init / chains / chat / serve）", sub)
 	}
@@ -126,6 +154,15 @@ func cmdInit(ctx context.Context, store *db.DB, workDir string) error {
 	p := model.NewProject("默认项目", []string{workDir})
 	if err := store.CreateProject(p); err != nil {
 		return err
+	}
+	// 生成配置文件（已存在则保留用户配置）
+	if _, err := os.Stat(config.Path(workDir)); os.IsNotExist(err) {
+		cfg := config.Default()
+		cfg.APIKey = os.Getenv("PAGENT_API_KEY")
+		if err := config.Save(workDir, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("已生成配置文件 %s（编辑 api_key / base_url / model 后即可使用）\n", config.Path(workDir))
 	}
 	fmt.Printf("初始化完成：项目 %s（链将在首次对话时创建）\n", p.ID)
 	return nil
@@ -201,11 +238,11 @@ func cmdChat(ctx context.Context, store *db.DB, msg, chainID, modelName, baseURL
 }
 
 // cmdServe 启动本地 Web 服务（里程碑1：浏览器前端）。
-func cmdServe(ctx context.Context, store *db.DB, modelName, baseURL, apiKey, workDir string) error {
+func cmdServe(ctx context.Context, store *db.DB, modelName, baseURL, apiKey, workDir string, testMode bool) error {
 	if apiKey == "" {
-		return fmt.Errorf("环境变量 PAGENT_API_KEY 未设置")
+		return fmt.Errorf("未配置 API Key（config.json 的 api_key 或环境变量 PAGENT_API_KEY）")
 	}
 	cl := provider.New(baseURL, apiKey, modelName)
-	srv := server.New(store, cl, workDir)
+	srv := server.New(store, cl, workDir, testMode)
 	return srv.Listen(":8080")
 }

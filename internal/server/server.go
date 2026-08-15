@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"pagent/internal/agent"
 	"pagent/internal/db"
@@ -31,8 +30,8 @@ type Server struct {
 	mux      *http.ServeMux
 }
 
-// New 创建服务。
-func New(store *db.DB, cl *provider.Client, workDir string) *Server {
+// New 创建服务。testMode 为 true 时注册测试专用路由（如手工建节点）。
+func New(store *db.DB, cl *provider.Client, workDir string, testMode bool) *Server {
 	s := &Server{store: store, provider: cl, workDir: workDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -45,8 +44,8 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
-	// 仅测试模式（PAGENT_TEST_MODE=1）注册手工建节点路由，生产不存在
-	if os.Getenv("PAGENT_TEST_MODE") == "1" {
+	// 仅测试模式注册手工建节点路由，生产不存在
+	if testMode {
 		mux.HandleFunc("POST /api/test/chains/{id}/nodes", s.handleTestCreateNode)
 	}
 	s.mux = mux

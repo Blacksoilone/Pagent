@@ -40,6 +40,11 @@ data: [DONE]
 
 func setupServer(t *testing.T) (*Server, *httptest.Server, *model.Project) {
 	t.Helper()
+	return setupServerMode(t, false)
+}
+
+func setupServerMode(t *testing.T, testMode bool) (*Server, *httptest.Server, *model.Project) {
+	t.Helper()
 	store := openTestDB(t)
 	ws := model.NewWorkspace("ws")
 	store.CreateWorkspace(ws)
@@ -58,7 +63,7 @@ func setupServer(t *testing.T) (*Server, *httptest.Server, *model.Project) {
 	openai := mockOpenAI(t)
 	t.Cleanup(openai.Close)
 	cl := provider.New(openai.URL, "test-key", "test-model")
-	srv := New(store, cl, t.TempDir())
+	srv := New(store, cl, t.TempDir(), testMode)
 	return srv, openai, p
 }
 
@@ -321,8 +326,7 @@ func TestTestCreateNode_Should_NotExistInProduction(t *testing.T) {
 }
 
 func TestTestCreateNode_Should_CreateNormalNode(t *testing.T) {
-	t.Setenv("PAGENT_TEST_MODE", "1")
-	srv, _, _ := setupServer(t)
+	srv, _, _ := setupServerMode(t, true)
 	var chains []ChainDTO
 	rec := doGet(t, srv, "/api/chains")
 	json.Unmarshal(rec.Body.Bytes(), &chains)
@@ -343,8 +347,7 @@ func TestTestCreateNode_Should_CreateNormalNode(t *testing.T) {
 }
 
 func TestTestCreateNode_Should_CreateGhostAndRejectBadKind(t *testing.T) {
-	t.Setenv("PAGENT_TEST_MODE", "1")
-	srv, _, _ := setupServer(t)
+	srv, _, _ := setupServerMode(t, true)
 	var chains []ChainDTO
 	rec := doGet(t, srv, "/api/chains")
 	json.Unmarshal(rec.Body.Bytes(), &chains)
