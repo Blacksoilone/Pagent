@@ -305,3 +305,63 @@ func TestForkPromoteMaterialize_FullFlow(t *testing.T) {
 		t.Errorf("final kind = %s, want important", out.Kind)
 	}
 }
+
+func TestTestCreateNode_Should_NotExistInProduction(t *testing.T) {
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+
+	// 未设置 PAGENT_TEST_MODE：路由不存在 → 404
+	rec = doPostJSON(t, srv, "/api/test/chains/"+chainID+"/nodes", `{"kind":"normal"}`)
+	if rec.Code != 404 {
+		t.Fatalf("test route should 404 without PAGENT_TEST_MODE, got %d", rec.Code)
+	}
+}
+
+func TestTestCreateNode_Should_CreateNormalNode(t *testing.T) {
+	t.Setenv("PAGENT_TEST_MODE", "1")
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+
+	rec = doPostJSON(t, srv, "/api/test/chains/"+chainID+"/nodes", `{"kind":"normal","content":"测试节点"}`)
+	if rec.Code != 201 {
+		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var out NodeDTO
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Kind != "normal" || out.Status != "done" {
+		t.Errorf("kind=%s status=%s, want normal/done", out.Kind, out.Status)
+	}
+	if out.ParentID == "" {
+		t.Errorf("should hang on chain tail")
+	}
+}
+
+func TestTestCreateNode_Should_CreateGhostAndRejectBadKind(t *testing.T) {
+	t.Setenv("PAGENT_TEST_MODE", "1")
+	srv, _, _ := setupServer(t)
+	var chains []ChainDTO
+	rec := doGet(t, srv, "/api/chains")
+	json.Unmarshal(rec.Body.Bytes(), &chains)
+	chainID := chains[0].ID
+
+	rec = doPostJSON(t, srv, "/api/test/chains/"+chainID+"/nodes", `{"kind":"ghost"}`)
+	if rec.Code != 201 {
+		t.Fatalf("create ghost status = %d", rec.Code)
+	}
+	var out NodeDTO
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Kind != "ghost" {
+		t.Errorf("kind = %s, want ghost", out.Kind)
+	}
+
+	rec = doPostJSON(t, srv, "/api/test/chains/"+chainID+"/nodes", `{"kind":"hacker"}`)
+	if rec.Code != 400 {
+		t.Fatalf("bad kind should 400, got %d", rec.Code)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"pagent/internal/agent"
 	"pagent/internal/db"
@@ -44,6 +45,10 @@ func New(store *db.DB, cl *provider.Client, workDir string) *Server {
 	mux.HandleFunc("GET /api/chains/{id}/nodes", s.handleChainNodes)
 	mux.HandleFunc("GET /api/statelines", s.handleStatelines)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
+	// 仅测试模式（PAGENT_TEST_MODE=1）注册手工建节点路由，生产不存在
+	if os.Getenv("PAGENT_TEST_MODE") == "1" {
+		mux.HandleFunc("POST /api/test/chains/{id}/nodes", s.handleTestCreateNode)
+	}
 	s.mux = mux
 	return s
 }
@@ -262,6 +267,76 @@ func (s *Server) handleDemoteNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, NodeDTO{ID: n.ID, Kind: string(model.NodeKindNormal)})
+}
+
+// TestCreateNodeRequest 手工建节点请求（仅测试模式）。
+type TestCreateNodeRequest struct {
+	Kind    string `json:"kind"`    // normal / ghost / important
+	Content string `json:"content"` // 可选：节点内容
+}
+
+// handleTestCreateNode 测试模式手工创建节点（不走 LLM）。
+// 仅 PAGENT_TEST_MODE=1 时注册路由；用于无模型环境下验证三操作（分支/提升/实化）。
+// 挂到主链尾（无 copied_from 的分支），kind 限定 normal/ghost/important。
+func (s *Server) handleTestCreateNode(w http.ResponseWriter, r *http.Request) {
+	chainID := r.PathValue("id")
+	var req TestCreateNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "请求格式错误: "+err.Error())
+		return
+	}
+	switch req.Kind {
+	case "normal", "ghost", "important":
+	case "":
+		req.Kind = "normal"
+	default:
+		writeErr(w, 400, "kind 必须是 normal/ghost/important")
+		return
+	}
+	if _, err := s.store.GetChain(chainID); err != nil {
+		writeErr(w, 404, "链不存在")
+		return
+	}
+	// 主链尾：该链中没有 copied_from 节点的分支；空链则无父节点
+	parentID := ""
+	branch := ""
+	nodes, err := s.store.ListChainNodes(chainID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	for _, n := range nodes {
+		if n.CopiedFrom == "" && n.Visible && branch == "" {
+			branch = n.Branch
+		}
+	}
+	if branch == "" {
+		// 全链都是 fork 分支或无节点：用第一个分支（若存在）
+		if len(nodes) > 0 {
+			branch = nodes[len(nodes)-1].Branch
+		}
+	}
+	if branch != "" {
+		if tail, err := s.store.GetBranchTail(chainID, branch); err == nil {
+			parentID = tail
+		}
+	}
+	n := model.NewNode(chainID, parentID, model.NodeKind(req.Kind))
+	n.Branch = branch
+	n.Visible = true
+	if req.Content != "" {
+		n.AppendPart(model.NodePartRoleUser, req.Content, len(req.Content))
+	}
+	n.Complete()
+	if err := s.store.InsertNode(n); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, NodeDTO{
+		ID: n.ID, Seq: n.Seq, ParentID: n.ParentID, Branch: n.Branch,
+		Kind: string(n.Kind), Status: string(n.Status), Visible: n.Visible,
+		Title: n.Title, Summary: n.Summary,
+	})
 }
 
 // handleMaterializeNode 实体化虚节点（3.6：虚节点是下一次 turn 的占位，

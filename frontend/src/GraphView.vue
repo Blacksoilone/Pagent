@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { computeBranchLayout, type BranchNode } from './branchLayout'
 import type { LayoutOptions } from './layout'
-import { forkChain, promoteNode, demoteNode, materializeNode, type NodeDTO } from './api'
+import { forkChain, promoteNode, demoteNode, materializeNode, createTestNode, type NodeDTO } from './api'
 
 const props = defineProps<{
   chainId: string
@@ -19,6 +19,9 @@ const emit = defineEmits<{
 // 节点操作菜单：选中节点 + 菜单位置（svg 坐标）
 const menu = ref<{ node: NodeDTO; x: number; y: number } | null>(null)
 const busy = ref(false)
+// 测试模式（开发构建）：手工新建节点，不依赖 LLM
+const isDev = import.meta.env.DEV
+const testHint = ref('')
 
 const branchResult = computed(() => {
   const bns: BranchNode[] = props.nodes.map(n => ({
@@ -73,6 +76,22 @@ async function run(action: 'fork' | 'promote' | 'demote' | 'materialize') {
   }
 }
 
+// 测试专用：新建节点（normal/ghost/important），仅开发模式显示按钮
+async function addTestNode(kind: 'normal' | 'ghost' | 'important') {
+  if (busy.value) return
+  busy.value = true
+  testHint.value = ''
+  try {
+    await createTestNode(props.chainId, kind)
+    testHint.value = '已创建 ' + kind + ' 节点'
+    emit('changed')
+  } catch (e) {
+    testHint.value = '创建失败: ' + String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
 function menuActions(): { key: 'fork' | 'promote' | 'demote' | 'materialize'; label: string }[] {
   const m = menu.value
   if (!m) return []
@@ -91,6 +110,16 @@ function menuActions(): { key: 'fork' | 'promote' | 'demote' | 'materialize'; la
     <div class="graph-toolbar">
       <slot name="title" />
       <span class="node-count">{{ nodes.length }} 个节点</span>
+      <span class="toolbar-spacer" />
+      <!-- 仅开发构建：测试专用手工建节点（后端需 PAGENT_TEST_MODE=1） -->
+      <template v-if="isDev">
+        <span class="test-hint">{{ testHint }}</span>
+        <span class="test-group">
+          <button class="test-btn" :disabled="busy" @click="addTestNode('normal')">+普通</button>
+          <button class="test-btn" :disabled="busy" @click="addTestNode('ghost')">+虚</button>
+          <button class="test-btn" :disabled="busy" @click="addTestNode('important')">+重要</button>
+        </span>
+      </template>
     </div>
     <div class="bracelet-wrap">
       <svg class="chain-svg" :viewBox="'0 0 ' + branchResult.width + ' ' + (braceletHeight + 40)"
@@ -139,7 +168,16 @@ function menuActions(): { key: 'fork' | 'promote' | 'demote' | 'materialize'; la
 
 <style scoped>
 .graph-main { flex: 1; overflow: auto; padding: 16px; position: relative; }
-.graph-toolbar { display: flex; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
+.graph-toolbar { display: flex; align-items: center; gap: 16px; font-size: 13px; color: #555; padding: 8px 0; }
+.toolbar-spacer { flex: 1; }
+.test-hint { font-size: 12px; color: #b8860b; }
+.test-group { display: flex; gap: 6px; }
+.test-btn {
+  padding: 3px 10px; border: 1px dashed #c9a86a; border-radius: 6px;
+  background: #fdf8ee; color: #8a6d1f; font-size: 12px; cursor: pointer;
+}
+.test-btn:hover { background: #f7ecd2; }
+.test-btn:disabled { opacity: 0.5; cursor: default; }
 .bracelet-wrap { display: flex; justify-content: center; }
 .chain-svg { min-height: 300px; }
 .bead-g { cursor: pointer; }

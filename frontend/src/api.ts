@@ -145,3 +145,18 @@ export async function materializeNode(chainId: string, nodeId: string): Promise<
   if (!res.ok) throw new Error(`materialize: ${res.status}`)
   return res.json()
 }
+
+// 测试模式手工创建节点（仅后端 PAGENT_TEST_MODE=1 时可用，生产 404）。
+export async function createTestNode(
+  chainId: string,
+  kind: 'normal' | 'ghost' | 'important',
+  content?: string,
+): Promise<NodeDTO> {
+  const res = await fetch(`/api/test/chains/${chainId}/nodes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, content: content ?? '' }),
+  })
+  if (!res.ok) throw new Error(`create test node: ${res.status}`)
+  return res.json()
+}
